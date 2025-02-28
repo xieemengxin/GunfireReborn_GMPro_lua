@@ -1,0 +1,176 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="源文件">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="头文件">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
+    </Filter>
+    <Filter Include="资源文件">
+      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
+      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    </Filter>
+    <Filter Include="资源文件\MinHook">
+      <UniqueIdentifier>{14bcd722-4d63-4b9a-b8bf-1667e75f3ae3}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="资源文件\ImGui">
+      <UniqueIdentifier>{2b04161c-3a68-4921-a826-6580352ee478}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="头文件\Class">
+      <UniqueIdentifier>{645979fa-ce25-4e8b-ab77-a9cd045d4c97}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="源文件\Class">
+      <UniqueIdentifier>{a70744be-0d67-4094-9697-f22ffa775ae6}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="资源文件\Lua">
+      <UniqueIdentifier>{6139018f-954d-40f9-87bb-b394333b5acd}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="pch.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="libs\MinHook\buffer.h">
+      <Filter>资源文件\MinHook</Filter>
+    </ClInclude>
+    <ClInclude Include="libs\MinHook\framework.h">
+      <Filter>资源文件\MinHook</Filter>
+    </ClInclude>
+    <ClInclude Include="libs\MinHook\hde32.h">
+      <Filter>资源文件\MinHook</Filter>
+    </ClInclude>
+    <ClInclude Include="libs\MinHook\hde64.h">
+      <Filter>资源文件\MinHook</Filter>
+    </ClInclude>
+    <ClInclude Include="libs\MinHook\hookmain.h">
+      <Filter>资源文件\MinHook</Filter>
+    </ClInclude>
+    <ClInclude Include="libs\MinHook\MinHook.h">
+      <Filter>资源文件\MinHook</Filter>
+    </ClInclude>
+    <ClInclude Include="libs\MinHook\pstdint.h">
+      <Filter>资源文件\MinHook</Filter>
+    </ClInclude>
+    <ClInclude Include="libs\MinHook\resource.h">
+      <Filter>资源文件\MinHook</Filter>
+    </ClInclude>
+    <ClInclude Include="libs\MinHook\table32.h">
+      <Filter>资源文件\MinHook</Filter>
+    </ClInclude>
+    <ClInclude Include="libs\MinHook\table64.h">
+      <Filter>资源文件\MinHook</Filter>
+    </ClInclude>
+    <ClInclude Include="libs\MinHook\trampoline.h">
+      <Filter>资源文件\MinHook</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Engine.h">
+      <Filter>头文件\Class</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Menu.h">
+      <Filter>头文件\Class</Filter>
+    </ClInclude>
+    <ClInclude Include="include\helper.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="include\offsets.h">
+      <Filter>头文件\Class</Filter>
+    </ClInclude>
+    <ClInclude Include="include\LuaVM.h">
+      <Filter>头文件\Class</Filter>
+    </ClInclude>
+    <ClInclude Include="libs\lua\lua.h">
+      <Filter>资源文件\Lua</Filter>
+    </ClInclude>
+    <ClInclude Include="libs\lua\lua.hpp">
+      <Filter>资源文件\Lua</Filter>
+    </ClInclude>
+    <ClInclude Include="libs\lua\luaconf.h">
+      <Filter>资源文件\Lua</Filter>
+    </ClInclude>
+    <ClInclude Include="libs\lua\luajit.h">
+      <Filter>资源文件\Lua</Filter>
+    </ClInclude>
+    <ClInclude Include="libs\lua\luajit_rolling.h">
+      <Filter>资源文件\Lua</Filter>
+    </ClInclude>
+    <ClInclude Include="libs\lua\lualib.h">
+      <Filter>资源文件\Lua</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Bridge.h">
+      <Filter>头文件\Class</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="dllmain.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="pch.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="libs\MinHook\buffer.c">
+      <Filter>资源文件\MinHook</Filter>
+    </ClCompile>
+    <ClCompile Include="libs\MinHook\hde32.c">
+      <Filter>资源文件\MinHook</Filter>
+    </ClCompile>
+    <ClCompile Include="libs\MinHook\hde64.c">
+      <Filter>资源文件\MinHook</Filter>
+    </ClCompile>
+    <ClCompile Include="libs\MinHook\hook.c">
+      <Filter>资源文件\MinHook</Filter>
+    </ClCompile>
+    <ClCompile Include="libs\MinHook\hookmain.cpp">
+      <Filter>资源文件\MinHook</Filter>
+    </ClCompile>
+    <ClCompile Include="libs\MinHook\trampoline.c">
+      <Filter>资源文件\MinHook</Filter>
+    </ClCompile>
+    <ClCompile Include="libs\ImGui\imgui.cpp">
+      <Filter>资源文件\ImGui</Filter>
+    </ClCompile>
+    <ClCompile Include="libs\ImGui\imgui_demo.cpp">
+      <Filter>资源文件\ImGui</Filter>
+    </ClCompile>
+    <ClCompile Include="libs\ImGui\imgui_draw.cpp">
+      <Filter>资源文件\ImGui</Filter>
+    </ClCompile>
+    <ClCompile Include="libs\ImGui\imgui_impl_dx11.cpp">
+      <Filter>资源文件\ImGui</Filter>
+    </ClCompile>
+    <ClCompile Include="libs\ImGui\imgui_impl_win32.cpp">
+      <Filter>资源文件\ImGui</Filter>
+    </ClCompile>
+    <ClCompile Include="libs\ImGui\imgui_tables.cpp">
+      <Filter>资源文件\ImGui</Filter>
+    </ClCompile>
+    <ClCompile Include="libs\ImGui\imgui_widgets.cpp">
+      <Filter>资源文件\ImGui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Engine.cpp">
+      <Filter>源文件\Class</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Menu.cpp">
+      <Filter>源文件\Class</Filter>
+    </ClCompile>
+    <ClCompile Include="Source.cpp">
+      <Filter>源文件\Class</Filter>
+    </ClCompile>
+    <ClCompile Include="src\LuaVM.cpp">
+      <Filter>源文件\Class</Filter>
+    </ClCompile>
+    <ClCompile Include="libs\lua\luajit.c">
+      <Filter>资源文件\Lua</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Bridge.cpp">
+      <Filter>源文件\Class</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="libs\MinHook\minhook.def">
+      <Filter>资源文件\MinHook</Filter>
+    </None>
+  </ItemGroup>
+</Project>
