@@ -107,6 +107,9 @@ namespace DX11Base
         // 向指定状态注册函数
         void RegisterFunctionToState(lua_State* state, const char* name, lua_CFunction func, const char* namespace_);
 
+        // 向指定状态添加搜索路径
+        void AddSearchPathToState(lua_State* state, const char* path);
+
     public:
         LuaVM();
         ~LuaVM();

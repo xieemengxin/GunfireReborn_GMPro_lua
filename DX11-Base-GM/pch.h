@@ -37,6 +37,12 @@
 #include "libs/ImGui/imgui_Impl_dx11.h"
 #include "libs/ImGui/imgui_Impl_Win32.h"
 
+// 添加这些头文件
+#include <fcntl.h>
+#include <io.h>
+#include <locale>
+#include <codecvt>
+
 #endif //PCH_H
 
 //Python

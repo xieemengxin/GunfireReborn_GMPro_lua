@@ -351,32 +351,99 @@ namespace DX11Base
 		}
 
 		// 渲染新建文件对话框
-		static void RenderNewFileModal()
+		void RenderNewFileModal()
 		{
+			// 增加默认大小，确保按钮不会被遮挡
+			static ImVec2 modalSize(400, 250);
+			
+			auto GetTimeString = []() -> std::string {
+				time_t now = time(nullptr);
+				struct tm timeinfo;
+				char buffer[80];
+				
+				#ifdef _WIN32
+					localtime_s(&timeinfo, &now);
+				#else
+					localtime_r(&now, &timeinfo);
+				#endif
+				
+				strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &timeinfo);
+				return std::string(buffer);
+			};
+			
 			if (showNewFileModal)
 			{
-				ImGui::OpenPopup("New Script File");
-				ImGui::SetNextWindowSize(ImVec2(300, 100));
-				if (ImGui::BeginPopupModal("New Script File", &showNewFileModal))
+				ImGui::SetNextWindowSize(modalSize, ImGuiCond_FirstUseEver);
+				ImGui::OpenPopup("Create New Script");
+				
+				if (ImGui::BeginPopupModal("Create New Script", &showNewFileModal, 
+					ImGuiWindowFlags_AlwaysAutoResize))  // 使用自动调整大小
 				{
-					ImGui::Text("Enter file name:");
-					ImGui::InputText("##filename", newFileName, sizeof(newFileName));
+					// 增加内容区域的内边距
+					ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 8));
 					
-					if (ImGui::Button("Create", ImVec2(120, 0)))
+					ImGui::Text("Enter file name:");
+					ImGui::InputText("##FileName", newFileName, sizeof(newFileName));
+					
+					// 添加垂直空间确保按钮可见
+					ImGui::Dummy(ImVec2(0, 20));
+					
+					// 将按钮对齐到窗口底部
+					float buttonWidth = 120;
+					float windowWidth = ImGui::GetWindowWidth();
+					float totalButtonWidth = 2 * buttonWidth + ImGui::GetStyle().ItemSpacing.x;
+					
+					ImGui::SetCursorPosX((windowWidth - totalButtonWidth) * 0.5f);
+					
+					if (ImGui::Button("Create", ImVec2(buttonWidth, 0)))
 					{
 						if (strlen(newFileName) > 0)
 						{
-							CreateNewScript(newFileName);
-							showNewFileModal = false;
-							memset(newFileName, 0, sizeof(newFileName));
+							std::string filePath = CodeEditor::GetScriptsPath() + newFileName;
+							if (!strstr(newFileName, ".lua"))
+								filePath += ".lua";
+								
+							// 创建文件
+							std::ofstream file(filePath);
+							if (file.is_open())
+							{
+								// 修改这里，使用字符串连接而不是 operator<<
+								std::string content = "-- ";
+								content += newFileName;
+								content += "\n-- Created: ";
+								content += GetTimeString();
+								content += "\n\n";
+								
+								file.write(content.c_str(), content.length());
+								file.close();
+								
+								// 刷新文件列表并选择新文件
+								LoadScriptFiles();
+								for (int i = 0; i < scriptFiles.size(); i++)
+								{
+									std::string filename = scriptFiles[i];
+									if (filename == newFileName || filename == std::string(newFileName) + ".lua")
+									{
+										selectedScript = i;
+										LoadScriptContent(filename);
+										break;
+									}
+								}
+								
+								memset(newFileName, 0, sizeof(newFileName));
+								showNewFileModal = false;
+							}
 						}
 					}
+					
 					ImGui::SameLine();
-					if (ImGui::Button("Cancel", ImVec2(120, 0)))
+					if (ImGui::Button("Cancel", ImVec2(buttonWidth, 0)))
 					{
-						showNewFileModal = false;
 						memset(newFileName, 0, sizeof(newFileName));
+						showNewFileModal = false;
 					}
+					
+					ImGui::PopStyleVar();
 					ImGui::EndPopup();
 				}
 			}
@@ -430,38 +497,68 @@ namespace DX11Base
 			ImGui::SameLine();
 			if (ImGui::Button("Run"))
 			{
+				// 添加运行按钮优化用户体验
 				RunScript();
 			}
 
 			// 渲染新建文件对话框
 			RenderNewFileModal();
 
-			// 编辑器样式设置
-			ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.031f, 0.031f, 0.031f, 0.95f));
-
 			// 计算编辑器大小
 			ImVec2 availSpace = ImGui::GetContentRegionAvail();
 			ImVec2 editorSize = ImVec2(availSpace.x, availSpace.y);
 
-			// 移除 CharsNoBlank 标志，只保留必要的标志
+			// 简化的编辑器代码
 			ImGui::InputTextMultiline("##CodeEditor",
 				EditorBuffer,
 				IM_ARRAYSIZE(EditorBuffer),
 				editorSize,
-				ImGuiInputTextFlags_AllowTabInput |
-				ImGuiInputTextFlags_Multiline,    // 只保留这两个标志
+				ImGuiInputTextFlags_AllowTabInput | ImGuiInputTextFlags_Multiline,
 				nullptr,
 				nullptr);
-
-		
-
-			ImGui::PopStyleColor();
 		}
 
 		// 初始化函数
 		void Initialize()
 		{
 			LoadScriptFiles();
+		}
+
+		// 在 CodeEditor 命名空间中添加一个简化版的编辑器函数
+		void RenderSimplifiedEditor() {
+			// 计算编辑器大小
+			ImVec2 availSpace = ImGui::GetContentRegionAvail();
+			ImVec2 editorSize = ImVec2(availSpace.x, availSpace.y);
+
+			// 编辑器样式设置 - 可以在这里增加背景色
+			ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.05f, 0.05f, 0.05f, 0.97f)); // 稍微亮一点的背景
+			
+			// 设置更明显的光标颜色
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.95f, 0.95f, 1.0f)); // 更亮的文本
+			
+			// 启用制表符支持，增加缩进辅助
+			ImGuiInputTextFlags flags = ImGuiInputTextFlags_AllowTabInput | 
+										ImGuiInputTextFlags_Multiline;
+			
+			// 如果启用了自动换行
+			if (wordWrap) {
+				flags |= ImGuiInputTextFlags_NoHorizontalScroll;
+			}
+			
+			// 使用固定的ID以避免焦点问题
+			ImGui::PushID("##FixedCodeEditor");
+			
+			// 渲染编辑器
+			ImGui::InputTextMultiline("##CodeEditor",
+				EditorBuffer,
+				IM_ARRAYSIZE(EditorBuffer),
+				editorSize,
+				flags,
+				nullptr,
+				nullptr);
+				
+			ImGui::PopID();
+			ImGui::PopStyleColor(2); // 恢复颜色样式
 		}
 	}
 
@@ -471,28 +568,12 @@ namespace DX11Base
 	//-----------------------------------------------------------------------------------
 	void Menu::Draw()
 	{
-		// 使用静态变量缓存上一帧的时间
-		static double lastFrameTime = 0.0;
-		static float deltaTime = 0.0f;
-		
-		// 计算帧时间
-		double currentTime = ImGui::GetTime();
-		deltaTime = (float)(currentTime - lastFrameTime);
-		lastFrameTime = currentTime;
-		
-		// 限制最大刷新率（例如 144 FPS）
-		const float minFrameTime = 1.0f / 144.0f;
-		if (deltaTime < minFrameTime)
-		{
-			return;
-		}
-
+		// 移除帧率限制，根据用户建议
 		if (g_Engine->bShowMenu)
 		{
 			// 设置鼠标显示状态
-			ImGui::GetIO().MouseDrawCursor = true;  // 在菜单显示时显示 ImGui 的鼠标
+			ImGui::GetIO().MouseDrawCursor = true;
 			
-			// 使用 ImGui::PushStyleVar 来优化样式切换
 			ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
 			MainMenu();
 			ImGui::PopStyleVar();
@@ -505,12 +586,6 @@ namespace DX11Base
 			// 菜单隐藏时禁用 ImGui 的鼠标绘制
 			ImGui::GetIO().MouseDrawCursor = false;
 		}
-
-		/*if (g_Engine->bShowHud && !g_Engine->bShowMenu)
-		{
-			Styles::SetNavigationMenuViewState(false);
-			Menu::HUD();
-		}*/
 
 		if (g_Engine->bShowDemoWindow && g_Engine->bShowMenu)
 			ImGui::ShowDemoWindow();
@@ -597,45 +672,95 @@ namespace DX11Base
 	void Menu::CodeEditor() {
 		if (ImGui::BeginTabItem("Code Editor"))
 		{
-			// 添加一些编辑器控件
-
-			if (ImGui::Button("Clear"))
+			// 改进布局 - 将按钮分为多行，确保适应不同宽度
+			
+			// 第一行 - 文件操作
+			if (ImGui::BeginCombo("##ScriptSelector", 
+				CodeEditor::selectedScript >= 0 ? 
+				CodeEditor::scriptFiles[CodeEditor::selectedScript].c_str() : "Select a script", 
+				ImGuiComboFlags_HeightLarge))
 			{
+				for (int i = 0; i < CodeEditor::scriptFiles.size(); i++)
+				{
+					bool is_selected = (CodeEditor::selectedScript == i);
+					if (ImGui::Selectable(CodeEditor::scriptFiles[i].c_str(), is_selected))
+					{
+						if (CodeEditor::selectedScript != i)
+						{
+							CodeEditor::selectedScript = i;
+							CodeEditor::LoadScriptContent(CodeEditor::scriptFiles[i]);
+						}
+					}
+					if (is_selected)
+						ImGui::SetItemDefaultFocus();
+				}
+				ImGui::EndCombo();
+			}
+
+			// 添加按钮组
+			ImGui::SameLine();
+			if (ImGui::Button("New")) {
+				CodeEditor::showNewFileModal = true;
+			}
+			
+			ImGui::SameLine();
+			if (ImGui::Button("Save") && CodeEditor::selectedScript >= 0) {
+				CodeEditor::SaveScript(CodeEditor::scriptFiles[CodeEditor::selectedScript]);
+			}
+			
+			ImGui::SameLine();
+			if (ImGui::Button("Refresh")) {
+				CodeEditor::LoadScriptFiles();
+			}
+
+			// 第二行 - 编辑器操作
+			if (ImGui::Button("Run")) {
+				CodeEditor::RunScript();
+			}
+			
+			ImGui::SameLine();
+			if (ImGui::Button("Clear")) {
 				memset(CodeEditor::EditorBuffer, 0, sizeof(CodeEditor::EditorBuffer));
 				CodeEditor::isFirstEdit = true;
 				strcpy_s(CodeEditor::EditorBuffer, "// Write your code here...");
 			}
+			
 			ImGui::SameLine();
-			if (ImGui::Button("Copy"))
-			{
+			if (ImGui::Button("Copy")) {
 				ImGui::SetClipboardText(CodeEditor::EditorBuffer);
 			}
+			
 			ImGui::SameLine();
-			if (ImGui::Checkbox("Word Wrap", &CodeEditor::wordWrap))
-			{
-				// 重新加载脚本文件
-				CodeEditor::LoadScriptFiles();
-			}
-
+			ImGui::Checkbox("Word Wrap", &CodeEditor::wordWrap);
+			
+			// 渲染新建文件对话框
+			CodeEditor::RenderNewFileModal();
+			
 			ImGui::Separator();
 
-			// 设置编辑器样式
-			if (!CodeEditor::wordWrap)
-			{
-				ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
-				ImGui::BeginChild("CodeEditorScroll", ImVec2(0, 0), true,
-					ImGuiWindowFlags_HorizontalScrollbar);
+			// 设置编辑器区域样式
+			ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 8)); // 增加内边距
+			ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
+			
+			if (!CodeEditor::wordWrap) {
+				// 使用水平滚动的子窗口，增加左边距确保光标显示
+				ImGui::BeginChild("CodeEditorScroll", ImVec2(0, 0), true, 
+					ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_AlwaysHorizontalScrollbar);
 			}
 
-			// 渲染代码编辑器
-			CodeEditor::RenderCodeEditor();
-
-			if (!CodeEditor::wordWrap)
-			{
+			// 增加编辑器左侧边距，确保光标正确显示
+			ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 4));
+			
+			// 渲染简化版编辑器
+			CodeEditor::RenderSimplifiedEditor();
+			
+			ImGui::PopStyleVar(); // ItemSpacing
+			
+			if (!CodeEditor::wordWrap) {
 				ImGui::EndChild();
-				ImGui::PopStyleVar();
 			}
-
+			
+			ImGui::PopStyleVar(2); // FramePadding, FrameRounding
 			ImGui::EndTabItem();
 		}
 	}
@@ -733,41 +858,68 @@ namespace DX11Base
 		DrawTextCentered(pos, color, pText, fontSize);
 	}
 
-	// 添加日志缓冲区
-	// 添加日志窗口绘制函数
+	// 使用更简单的方法显示日志
 	void Menu::DrawLogWindow() {
 		if (!g_Engine->bShowMenu) return;
 
-		ImGui::SetNextWindowSize(ImVec2(500, 200), ImGuiCond_FirstUseEver);
+		static ImVec2 logWindowSize(500, 200);
+		
+		ImGui::SetNextWindowSize(logWindowSize, ImGuiCond_FirstUseEver);
 		ImGui::SetNextWindowPos(ImVec2(10, ImGui::GetIO().DisplaySize.y - 220), ImGuiCond_FirstUseEver);
 		
 		if (!ImGui::Begin("Console Log", nullptr, ImGuiWindowFlags_NoCollapse)) {
 			ImGui::End();
 			return;
 		}
+		
+		logWindowSize = ImGui::GetWindowSize();
 
-		// 工具栏按钮
+		// 控制按钮
 		if (ImGui::Button("Clear")) {
-			g_Console->logBuffer.clear();  // 
+			g_Console->Clear();
 		}
+		
 		ImGui::SameLine();
-		if (ImGui::Button("Copy")) ImGui::LogToClipboard();
-		ImGui::SameLine();
-		bool& autoScroll = g_Console->AutoScroll;  // 使用引用
+		bool& autoScroll = g_Console->AutoScroll;
 		ImGui::Checkbox("Auto-scroll", &autoScroll);
 
 		ImGui::Separator();
 
-		// 日志内容区域
+		// 确保使用正确的字体 - 这里我们尝试使用字体索引0，通常是默认加载的中文字体
+		if (ImGui::GetIO().Fonts->Fonts.Size > 0) {
+			ImGui::PushFont(ImGui::GetIO().Fonts->Fonts[0]);
+		}
+
 		ImGui::BeginChild("scrolling", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
+		
+		// 修改文本颜色设置为白色，在黑色背景上清晰可见
+		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+		
+		// 为不同类型的日志设置不同颜色
+		// 可以在 Console::Log 和 Console::cLog 中添加颜色标记，然后这里根据标记设置不同颜色
+		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.8f, 0.8f, 1.0f)); // 普通日志用浅灰色
+		// 错误日志可以用红色: ImVec4(1.0f, 0.4f, 0.4f, 1.0f)
+		// 警告日志可以用黄色: ImVec4(1.0f, 0.9f, 0.4f, 1.0f)
+		// 成功日志可以用绿色: ImVec4(0.4f, 1.0f, 0.4f, 1.0f)
+		
+		// 简单直接地显示文本缓冲区
 		ImGui::TextUnformatted(g_Console->logBuffer.begin(), g_Console->logBuffer.end());
 		
+		ImGui::PopStyleColor();
+		
+		// 自动滚动
 		if (g_Console->ScrollToBottom || (g_Console->AutoScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY())) {
 			ImGui::SetScrollHereY(1.0f);
 		}
 		g_Console->ScrollToBottom = false;
 
 		ImGui::EndChild();
+		
+		// 恢复字体
+		if (ImGui::GetIO().Fonts->Fonts.Size > 0) {
+			ImGui::PopFont();
+		}
+		
 		ImGui::End();
 	}
 

@@ -94,25 +94,77 @@ namespace DX11Base
 		}
 
 		luaL_openlibs(L);
-		RegisterAPI();
-
-		// 添加脚本搜索路径
+		
+		// 添加脚本搜索路径（放在 RegisterAPI 之前）
 		std::string scriptsPath = CodeEditor::GetScriptsPath();
-		AddSearchPath(scriptsPath.c_str());
+		
+		// 获取程序根目录
+		char buffer[MAX_PATH];
+		GetModuleFileNameA(NULL, buffer, MAX_PATH);
+		std::string rootPath = buffer;
+		rootPath = rootPath.substr(0, rootPath.find_last_of("\\/"));
+		
+		// 添加多个搜索路径
+		AddSearchPath((rootPath + "\\Scripts\\?.lua").c_str());  // Scripts 目录中的 .lua 文件
+		AddSearchPath((rootPath + "\\Scripts\\?\\init.lua").c_str());  // Scripts 目录中的模块
+		AddSearchPath((rootPath + "\\Scripts\\libs\\?.lua").c_str());  // 库文件
+		AddSearchPath((rootPath + "\\Scripts\\modules\\?.lua").c_str());  // 模块文件
+		
+		// 注册 API 函数
+		RegisterAPI();
 
 		// 创建线程池的线程状态
 		for (size_t i = 0; i < 4; i++) {  // 创建4个线程状态
 			lua_State* threadState = CreateNewState();
 			if (threadState) {
+				// 为线程状态也添加搜索路径
+				AddSearchPathToState(threadState, (rootPath + "\\Scripts\\?.lua").c_str());
+				AddSearchPathToState(threadState, (rootPath + "\\Scripts\\?\\init.lua").c_str());
+				AddSearchPathToState(threadState, (rootPath + "\\Scripts\\libs\\?.lua").c_str());
+				AddSearchPathToState(threadState, (rootPath + "\\Scripts\\modules\\?.lua").c_str());
+				
 				std::lock_guard<std::mutex> lock(luaMutex);
 				threadStates.push_back(threadState);
 			}
 		}
 
-	
-
 		isInitialized = true;
 		return true;
+	}
+
+	// 新增方法：向指定状态添加搜索路径
+	void LuaVM::AddSearchPathToState(lua_State* state, const char* path)
+	{
+		if (!state || !path) return;
+
+		lua_getglobal(state, "package");
+		lua_getfield(state, -1, "path");
+		std::string cur_path = lua_tostring(state, -1);
+		cur_path.append(";");
+		cur_path.append(path);
+		lua_pop(state, 1);
+		lua_pushstring(state, cur_path.c_str());
+		lua_setfield(state, -2, "path");
+		lua_pop(state, 1);
+	}
+
+	// 修改现有方法
+	void LuaVM::AddSearchPath(const char* path)
+	{
+		if (!isInitialized || !path) return;
+
+		// 添加到主状态
+		AddSearchPathToState(L, path);
+		
+		// 添加到所有线程状态
+		for (auto state : threadStates) {
+			if (state) {
+				AddSearchPathToState(state, path);
+			}
+		}
+		
+		// 输出日志以便调试
+		g_Console->cLog("添加 Lua 搜索路径: %s", Console::EColor_green, path);
 	}
 
 	void LuaVM::RegisterAPI(lua_State* state)
@@ -225,22 +277,6 @@ namespace DX11Base
 		});
 		
 		return true;
-	}
-
-	void LuaVM::AddSearchPath(const char* path)
-	{
-		if (!isInitialized || !path) return;
-
-		lua_getglobal(L, "package");
-		lua_getfield(L, -1, "path");
-		std::string cur_path = lua_tostring(L, -1);
-		cur_path.append(";");
-		cur_path.append(path);
-		cur_path.append("?.lua");
-		lua_pop(L, 1);
-		lua_pushstring(L, cur_path.c_str());
-		lua_setfield(L, -2, "path");
-		lua_pop(L, 1);
 	}
 
 	void LuaVM::Reset()

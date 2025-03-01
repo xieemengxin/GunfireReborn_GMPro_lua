@@ -45,6 +45,10 @@ namespace DX11Base
 		Engine();
 		~Engine();
 
+		// 添加这个静态方法声明
+
+		static void LoadImGuiFonts();
+
 	};
 	inline std::unique_ptr<Engine> g_Engine;
 
@@ -114,6 +118,8 @@ namespace DX11Base
 		// 添加日志到 IMGUI 缓冲区
 
 		void AddToLogBuffer(const char* text);
+
+
 
 	private:
 		HANDLE								pHandle{};

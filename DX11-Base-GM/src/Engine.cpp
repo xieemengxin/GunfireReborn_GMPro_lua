@@ -75,6 +75,11 @@ namespace DX11Base
 			g_Console->cLog("Bridge initialized \n", Console::EColor_green);
 		}
 		
+		SetConsoleOutputCP(CP_UTF8);   // 控制台使用UTF-8
+		SetConsoleCP(CP_UTF8);         // 控制台输入使用UTF-8
+
+		// 在适当的初始化位置添加以下代码来加载中文字体
+
 	}
 
 	bool Engine::GetKeyState(WORD vKey, SHORT delta)
@@ -136,6 +141,45 @@ namespace DX11Base
 		lastTime = currentTime;
 	}
 
+	void Engine::LoadImGuiFonts()
+	{
+		ImGuiIO& io = ImGui::GetIO(); (void)io;
+		// 清除现有字体
+		io.Fonts->Clear();
+
+		// 加载中文字体
+		ImFontConfig font_config;
+		font_config.OversampleH = 2;
+		font_config.OversampleV = 1;
+		font_config.PixelSnapH = false;
+
+		// 定义字符范围 - 包括中文字符
+		static const ImWchar ranges[] = {
+			0x0020, 0x00FF, // 基本拉丁字符
+			0x2000, 0x206F, // 常用标点
+			0x3000, 0x30FF, // 日文假名（也常用于中文）
+			0x31F0, 0x31FF, // 假名扩展
+			0x4e00, 0x9FAF, // 常用汉字
+			0x0400, 0x052F, // 西里尔字母
+			0xFF00, 0xFFEF, // 全角字符
+			0,
+		};
+
+		// 加载微软雅黑字体（支持中文）
+		ImFont* font = io.Fonts->AddFontFromFileTTF(
+			"c:\\Windows\\Fonts\\msyh.ttc", 16.0f,
+			&font_config, ranges);
+
+		if (!font) {
+			// 如果加载失败，使用默认字体
+			g_Console->LogError("Failed to load Chinese font, using default");
+			io.Fonts->AddFontDefault();
+		}
+
+		// 重建字体纹理
+		io.Fonts->Build();
+	}
+
 #pragma endregion
 
 
@@ -158,9 +202,144 @@ namespace DX11Base
 	
 	HWND Console::GetWindowHandle() { return this->pHwnd; }
 
-	void Console::Clear() { system("cls"); }
+	// 在适当位置添加UTF-8转换函数
+	std::string ConvertToUTF8(const char* text)
+	{
+		if (!text || !strlen(text))
+			return "";
+		
+		// 获取需要的缓冲区大小
+		int wideLen = MultiByteToWideChar(CP_ACP, 0, text, -1, NULL, 0);
+		if (wideLen <= 0) return text;
+		
+		// 转换到宽字符
+		wchar_t* wideStr = new wchar_t[wideLen];
+		MultiByteToWideChar(CP_ACP, 0, text, -1, wideStr, wideLen);
+		
+		// 转换到UTF-8
+		int utf8Len = WideCharToMultiByte(CP_UTF8, 0, wideStr, -1, NULL, 0, NULL, NULL);
+		if (utf8Len <= 0) {
+			delete[] wideStr;
+			return text;
+		}
+		
+		char* utf8Str = new char[utf8Len];
+		WideCharToMultiByte(CP_UTF8, 0, wideStr, -1, utf8Str, utf8Len, NULL, NULL);
+		
+		std::string result(utf8Str);
+		delete[] wideStr;
+		delete[] utf8Str;
+		
+		return result;
+	}
 
-	//	creates a console instance with input name <consoleName>
+	// 修改Clear函数来同时清除ImGui缓冲区
+	void Console::Clear() 
+	{
+		// 清除控制台
+		//system("cls"); 
+		
+		// 同时清除ImGui缓冲区
+		if (g_Console) {
+			g_Console->logBuffer.clear();
+			g_Console->ScrollToBottom = true;
+		}
+	}
+
+	// 修改Log函数确保中文正确显示
+	void Console::Log(const char* format, ...)
+	{
+		// 原有代码...
+		va_list args;
+		va_start(args, format);
+		
+		char buffer[1024];
+		vsprintf_s(buffer, format, args);
+		
+		va_end(args);
+		
+		// 转换为UTF-8
+		std::string utf8Text = ConvertToUTF8(buffer);
+		
+		// 添加到ImGui缓冲区
+		if (g_Console->bInit) {
+			char timestamp[32];
+			time_t now = time(nullptr);
+			struct tm timeinfo;
+			localtime_s(&timeinfo, &now);
+			strftime(timestamp, sizeof(timestamp), "[%H:%M:%S] ", &timeinfo);
+			
+			g_Console->logBuffer.append(timestamp);
+			g_Console->logBuffer.append(utf8Text.c_str());
+			g_Console->logBuffer.append("\n");
+			g_Console->ScrollToBottom = true;
+		}
+		
+		// 输出到控制台
+		if (pOutStream)
+			fprintf(pOutStream, "%s\n", utf8Text.c_str());
+		
+		// 如果有日志文件，写入日志
+		if (g_Console && g_Console->logFile.is_open()) {
+			g_Console->logFile << buffer << std::endl;
+			g_Console->logFile.flush();
+		}
+	}
+
+	// 修改 cLog 函数以支持中文字符，添加时间戳和换行符
+	void Console::cLog(const char* fmt, EColors color, ...)
+	{
+		if (!pOutStream)
+			return;
+
+		// 获取当前时间
+		SYSTEMTIME st;
+		GetLocalTime(&st);
+		
+		// 格式化时间戳
+		char timestamp[64];
+		sprintf_s(timestamp, "[%02d:%02d:%02d] ", 
+			st.wHour, st.wMinute, st.wSecond);
+		
+		// 格式化参数
+		va_list arg;
+		va_start(arg, color);
+		char buffer[4096];
+		vsprintf_s(buffer, fmt, arg);
+		va_end(arg);
+
+		// 转换为UTF-8
+		std::string utf8Text = ConvertToUTF8(buffer);
+		
+		// 创建完整消息（带时间戳）
+		std::string fullMsg = timestamp;
+		fullMsg += utf8Text;
+
+		// 设置控制台文本颜色
+		HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+		SetConsoleTextAttribute(hConsole, color);
+
+		// 输出到控制台（添加换行符）
+		fprintf(pOutStream, "%s\n", fullMsg.c_str());
+
+		// 恢复默认颜色
+		SetConsoleTextAttribute(hConsole, EColors::EColor_DEFAULT);
+
+		// 添加到ImGui缓冲区（添加换行符）
+		if (g_Console && g_Console->bInit) {
+			g_Console->logBuffer.append(fullMsg.c_str());
+			g_Console->logBuffer.append("\n");
+			g_Console->ScrollToBottom = true;
+		}
+
+		// 如果有日志文件，写入日志（添加换行符）
+		if (g_Console && g_Console->logFile.is_open()) {
+			g_Console->logFile << fullMsg << std::endl;
+			g_Console->logFile.flush();
+		}
+	}
+
+	// 在InitializeConsole函数中添加中文支持
 	void Console::InitializeConsole(const char* ConsoleName, bool bShowWindow)
 	{
 		if (Console::bInit)
@@ -187,6 +366,9 @@ namespace DX11Base
 
 		// 初始化控制台
 		AllocConsole();
+		// 设置控制台代码页为UTF-8
+		SetConsoleOutputCP(CP_UTF8);
+		SetConsoleCP(CP_UTF8);
 		pHandle = GetStdHandle(STD_OUTPUT_HANDLE);
 		pHwnd = GetConsoleWindow();
 		freopen_s(&pOutStream, "CONOUT$", "w", stdout);
@@ -206,8 +388,9 @@ namespace DX11Base
 		strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", localtime(&now));
 		logFile << "=== GMPro Log Started at " << timestamp << " ===" << std::endl;
 		logFile.flush();
+
+	
 	}
-	// 添加 Console::AddToLogBuffer 的实现
 
 	void Console::AddToLogBuffer(const char* text) {
 		if (logBuffer.size() > 0 && logBuffer.end()[-1] != '\n') {
@@ -216,45 +399,6 @@ namespace DX11Base
 		
 		logBuffer.append(text);
 		ScrollToBottom = true;
-	}
-	//	raw print to console with desired color and formatting
-	void Console::cLog(const char* fmt, EColors color, ...) {
-		if (!bInit) return;
-
-		// 获取当前时间
-		SYSTEMTIME st;
-		GetLocalTime(&st);
-		
-		// 格式化时间戳
-		char timestamp[64];
-		sprintf_s(timestamp, "[%02d:%02d:%02d] ", 
-			st.wHour, st.wMinute, st.wSecond);
-
-		// 格式化消息内容
-		va_list args;
-		va_start(args, color);
-		char buf[1024];
-		vsnprintf(buf, sizeof(buf), fmt, args);
-		va_end(args);
-
-		// 组合完整消息
-		char fullMsg[2048];
-		sprintf_s(fullMsg, "%s%s", timestamp, buf);
-
-		// 输出到控制台
-		SetConsoleTextAttribute(pHandle, color);
-		printf("%s", fullMsg);
-		SetConsoleTextAttribute(pHandle, EColor_DEFAULT);
-		
-		// 输出到 ImGui 窗口
-		AddToLogBuffer(fullMsg);
-
-		// 写入日志文件
-		if (logFile.is_open()) {
-			std::lock_guard<std::mutex> lock(logMutex);
-			logFile << fullMsg;
-			logFile.flush();
-		}
 	}
 
 	void Console::LogError(const char* fmt, ...)
@@ -316,18 +460,6 @@ namespace DX11Base
 		ShowWindow(pHwnd, bShow ? SW_SHOW : SW_HIDE);
 	}
 
-	//	
-	void Console::Log(const char* fmt, ...)
-	{
-		if (!pOutStream)
-			return;
-
-		va_list arg;
-		va_start(arg, fmt);
-		vfprintf(pOutStream, fmt, arg);
-		va_end(arg);
-	}
-
 #pragma endregion
 
 
@@ -342,29 +474,63 @@ namespace DX11Base
 
 	//-----------------------------------------------------------------------------------
 	//  
-	LRESULT D3D11Window::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+	LRESULT CALLBACK D3D11Window::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 	{
-		if (g_Engine->bShowMenu)
-		{
-			// 让 ImGui 处理输入，它会自己处理字符输入，不需要我们额外处理
-			if (ImGui_ImplWin32_WndProcHandler((HWND)g_D3D11Window->m_OldWndProc, msg, wParam, lParam))
-				return true;
-
-			// 如果 ImGui 想要捕获输入，阻止消息传递给游戏
-			if (ImGui::GetIO().WantCaptureMouse || ImGui::GetIO().WantCaptureKeyboard)
-				return true;
+		// 设置窗口使用UTF-8
+		if (uMsg == WM_CREATE) {
+			SetWindowLongW(hWnd, GWL_STYLE, GetWindowLongW(hWnd, GWL_STYLE) | WS_CLIPCHILDREN | WS_CLIPSIBLINGS);
 		}
 		
-		// 如果 ImGui 不处理，传递给原始窗口过程
-		return CallWindowProc((WNDPROC)g_D3D11Window->m_OldWndProc, hWnd, msg, wParam, lParam);
+		// 处理输入法消息，以支持中文输入
+		if (ImGui_ImplWin32_WndProcHandler(hWnd, uMsg, wParam, lParam))
+			return true;
+		
+		// ... 其他消息处理
+		return CallWindowProc((WNDPROC)g_D3D11Window->m_OldWndProc, hWnd, uMsg, wParam, lParam);
 	}
 
 	//-----------------------------------------------------------------------------------
 	//  
 	HRESULT APIENTRY D3D11Window::SwapChain_Present_hook(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags)
 	{
-		g_D3D11Window->Overlay(pSwapChain);
+		// 保存当前渲染状态
+		ID3D11DeviceContext* pContext = nullptr;
+		ID3D11RenderTargetView* pRTV = nullptr;
+		ID3D11DepthStencilView* pDSV = nullptr;
+		D3D11_VIEWPORT viewport;
+		UINT numViewports = 1;
+		ID3D11BlendState* pBlendState = nullptr;
+		FLOAT blendFactor[4];
+		UINT sampleMask;
+		
+		// 获取设备上下文
+		pSwapChain->GetDevice(__uuidof(ID3D11Device), (void**)&g_D3D11Window->m_Device);
+		g_D3D11Window->m_Device->GetImmediateContext(&pContext);
+		
+		// 保存原始状态
+		pContext->OMGetRenderTargets(1, &pRTV, &pDSV);
+		pContext->RSGetViewports(&numViewports, &viewport);
+		pContext->OMGetBlendState(&pBlendState, blendFactor, &sampleMask);
+		
+		// 更新我们的 D3D11 状态
+		if (g_D3D11Window->m_pSwapChain != pSwapChain)
+			g_D3D11Window->m_pSwapChain = pSwapChain;
 
+		// 渲染 ImGui 界面
+		g_D3D11Window->Overlay(pSwapChain);
+		
+		// 恢复原始渲染状态
+		pContext->OMSetRenderTargets(1, &pRTV, pDSV);
+		pContext->RSSetViewports(numViewports, &viewport);
+		pContext->OMSetBlendState(pBlendState, blendFactor, sampleMask);
+		
+		// 释放引用
+		if (pRTV) pRTV->Release();
+		if (pDSV) pDSV->Release();
+		if (pBlendState) pBlendState->Release();
+		if (pContext) pContext->Release();
+		
+		// 调用原始的 Present 函数以显示游戏内容
 		return g_D3D11Window->IDXGISwapChain_Present_stub(pSwapChain, SyncInterval, Flags);
 	}
 
@@ -521,28 +687,8 @@ namespace DX11Base
 		{
 			ImGui::CreateContext();
 			ImGuiIO& io = ImGui::GetIO(); (void)io;
-			
-			// 获取中文字符范围
-			ImVector<ImWchar> ranges;
-			ImFontGlyphRangesBuilder builder;
-			builder.AddRanges(io.Fonts->GetGlyphRangesDefault());
-			builder.AddRanges(io.Fonts->GetGlyphRangesChineseFull());
-			builder.BuildRanges(&ranges);
-
-			// 配置字体以提高清晰度
-			ImFontConfig config;
-			config.FontDataOwnedByAtlas = false;
-			config.OversampleH = 3;        // 增加水平过采样
-			config.OversampleV = 3;        // 增加垂直过采样
-			config.PixelSnapH = true;      // 启用像素对齐
-			config.GlyphExtraSpacing.x = 0.5f;  // 字符间距略微调整
-			config.RasterizerMultiply = 1.1f;   // 稍微加深字体
-			
-			// 加载中文字体，稍微增大字号以提高清晰度
-			io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\msyh.ttc", 17.0f, &config, ranges.Data);
-			
-			// 确保字体纹理被创建
-			io.Fonts->Build();
+			Engine::LoadImGuiFonts();
+		
 
 			io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 			io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
@@ -583,18 +729,31 @@ namespace DX11Base
 		if (!bInitImGui)
 			InitImGui(pSwapChain);
 
+
+		// 设置当前 ImGui 上下文
+		ImGui::SetCurrentContext(pImGui);
+		
+		// 开始新帧
 		ImGui_ImplDX11_NewFrame();
 		ImGui_ImplWin32_NewFrame();
 		ImGui::NewFrame();
+		
+		// 确保鼠标处理正确
 		ImGui::GetIO().MouseDrawCursor = g_Engine->bShowMenu;
-
-		//	Render Menu Loop
+		
+		// 渲染菜单
 		Menu::Draw();
-
-		ImGui::EndFrame();
+		
+		// 完成渲染
 		ImGui::Render();
+		
+		// 设置渲染目标但不清除背景
 		m_DeviceContext->OMSetRenderTargets(1, &m_RenderTargetView, NULL);
+		
+		// 绘制 ImGui 数据
 		ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+		
+		// 不要在这里调用 Present - 让原始的 Present 函数在 hook 中完成
 	}
 
 #pragma endregion
