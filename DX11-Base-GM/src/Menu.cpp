@@ -2,8 +2,12 @@
 #include <Engine.h>
 #include <Menu.h>
 #include <luaVM.h>
+
 namespace DX11Base
 {
+	
+	
+
 	namespace Styles
 	{
 		// 在初始化 ImGui 时设置样式
@@ -492,6 +496,9 @@ namespace DX11Base
 			ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
 			MainMenu();
 			ImGui::PopStyleVar();
+
+			// 在主窗口绘制完成后绘制日志窗口
+			DrawLogWindow();
 		}
 		else
 		{
@@ -726,8 +733,48 @@ namespace DX11Base
 		DrawTextCentered(pos, color, pText, fontSize);
 	}
 
+	// 添加日志缓冲区
+	// 添加日志窗口绘制函数
+	void Menu::DrawLogWindow() {
+		if (!g_Engine->bShowMenu) return;
+
+		ImGui::SetNextWindowSize(ImVec2(500, 200), ImGuiCond_FirstUseEver);
+		ImGui::SetNextWindowPos(ImVec2(10, ImGui::GetIO().DisplaySize.y - 220), ImGuiCond_FirstUseEver);
+		
+		if (!ImGui::Begin("Console Log", nullptr, ImGuiWindowFlags_NoCollapse)) {
+			ImGui::End();
+			return;
+		}
+
+		// 工具栏按钮
+		if (ImGui::Button("Clear")) {
+			g_Console->logBuffer.clear();  // 
+		}
+		ImGui::SameLine();
+		if (ImGui::Button("Copy")) ImGui::LogToClipboard();
+		ImGui::SameLine();
+		bool& autoScroll = g_Console->AutoScroll;  // 使用引用
+		ImGui::Checkbox("Auto-scroll", &autoScroll);
+
+		ImGui::Separator();
+
+		// 日志内容区域
+		ImGui::BeginChild("scrolling", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
+		ImGui::TextUnformatted(g_Console->logBuffer.begin(), g_Console->logBuffer.end());
+		
+		if (g_Console->ScrollToBottom || (g_Console->AutoScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY())) {
+			ImGui::SetScrollHereY(1.0f);
+		}
+		g_Console->ScrollToBottom = false;
+
+		ImGui::EndChild();
+		ImGui::End();
+	}
+
 	void Menu::Initialize()
 	{
 		CodeEditor::Initialize();
 	}
+
+
 }

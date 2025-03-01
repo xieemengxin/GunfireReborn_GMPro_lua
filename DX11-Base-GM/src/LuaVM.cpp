@@ -62,6 +62,27 @@ namespace DX11Base
 		luaL_traceback(L, L, msg, 1);  // 生成堆栈跟踪
 		return 1;
 	}
+
+	// 自定义的 print 函数
+	static int CustomPrint(lua_State* L) {
+		int nargs = lua_gettop(L);
+		std::string output;
+		
+		for (int i = 1; i <= nargs; i++) {
+			if (i > 1) output += "\t";
+			if (lua_isstring(L, i)) {
+				output += lua_tostring(L, i);
+			}
+		}
+		// 移除末尾的换行符，因为 cLog 会自动添加时间戳
+		// output += "\n";  // 删除这行
+		
+		// 使用白色文本颜色，并确保添加到日志缓冲区
+		g_Console->cLog(output.c_str(), Console::EColors::EColor_white);
+		
+		return 0;
+	}
+
 	bool LuaVM::Initialize()
 	{
 		if (isInitialized) return true;
@@ -88,6 +109,8 @@ namespace DX11Base
 			}
 		}
 
+	
+
 		isInitialized = true;
 		return true;
 	}
@@ -97,11 +120,15 @@ namespace DX11Base
 		// 如果没有传入状态，使用主状态
 		lua_State* target = state ? state : L;
 
+		// 首先替换全局的 print 函数
+		lua_pushcfunction(target, CustomPrint);
+		lua_setglobal(target, "print");
+
 		// 创建自定义命名空间
 		lua_newtable(target);
 
 		// 注册API函数到 GMP 命名空间
-		lua_pushcfunction(target, LuaAPI::Print);
+		lua_pushcfunction(target, CustomPrint);  // 在 GMP 命名空间也使用相同的 print 函数
 		lua_setfield(target, -2, "print");
 
 		lua_pushcfunction(target, LuaAPI::GetWindowSize);
@@ -121,10 +148,6 @@ namespace DX11Base
 
 		// 设置命名空间名称为 GMP
 		lua_setglobal(target, LuaVM::defaultNameSpace.c_str());
-
-		// 覆盖全局的 print 函数
-		//lua_pushcfunction(target, LuaAPI::Print);
-		//lua_setglobal(target, "print");
 	}
 
 	bool LuaVM::ExecuteFile(const char* filename)
@@ -521,12 +544,7 @@ namespace DX11Base
 	// API 函数实现
 	namespace LuaAPI
 	{
-		int Print(lua_State* L)
-		{
-			const char* message = luaL_checkstring(L, 1);
-			g_Console->cLog(message);
-			return 0;
-		}
+		
 
 		int GetWindowSize(lua_State* L)
 		{

@@ -14,7 +14,9 @@ namespace DX11Base {
 	TPyGILState_Release Bridge::fpPyGILState_Release = nullptr;
 	TPyObject_Str Bridge::fpPyObject_Str = nullptr;
 	TPyTuple_New Bridge::fpPyTuple_New = nullptr;
-	
+	TPyObject_SetAttr Bridge::fpPyObject_SetAttr = nullptr;
+	TPyDict_SetItem Bridge::fpPyDict_SetItem = nullptr;
+
 	bool Bridge::isInitialized()
 	{
 		return isInitionalized;
@@ -44,6 +46,7 @@ namespace DX11Base {
 		fpPyGILState_Release = (TPyGILState_Release)(m1logic4 + Offset::offset_PyGILState_Release);
 		fpPyObject_Str = (TPyObject_Str)(m1logic4 + Offset::offset_PyObject_Str);
 		fpPyTuple_New = (TPyTuple_New)(m1logic4 + Offset::offset_PyTuple_New);
+		fpPyObject_SetAttr = (TPyObject_SetAttr)(m1logic4 + Offset::offset_PyObject_SetAttr);
 		// 验证函数指针
 		if (!fpPyEval_CallObjectWithKeywords || !fpPyObject_GetAttr ||  !fpPy_BuildValue || 
 			!fpPyImport_Import || !fpPyGILState_Ensure || 
@@ -187,44 +190,104 @@ namespace DX11Base {
 		return 0;
 	}
 
+	// 处理属性访问（.操作符）
 	int Bridge::py_object_index(lua_State* L) {
+		g_Console->cLog("py_object_index: 开始属性访问", Console::EColor_green);
+		
 		PyObjectWrapper* wrapper = (PyObjectWrapper*)luaL_checkudata(L, 1, "PyObject");
-		const char* key = luaL_checkstring(L, 2);
-
-
 		if (!wrapper || !wrapper->obj) {
-			g_Console->cLog("Invalid Python object when accessing '%s'\n", Console::EColor_red, key);
+			g_Console->cLog("py_object_index: 无效的Python对象", Console::EColor_red);
 			return luaL_error(L, "Invalid Python object");
 		}
 
 		PyGILState_STATE gstate = fpPyGILState_Ensure();
 
-		// 尝试获取属性
-		PyObject* attr = fpPyObject_GetAttr(wrapper->obj, fpPy_BuildValue("s", key));
-		if (!attr) {
-			g_Console->cLog("Failed to get attribute '%s'\n", Console::EColor_red, key);
+		// 只处理字符串键的属性访问
+		const char* key = luaL_checkstring(L, 2);
+		g_Console->cLog("py_object_index: 处理属性访问: %s", Console::EColor_green, key);
+
+		// 获取属性
+		PyObject* attr_name = fpPy_BuildValue("s", key);
+		if (!attr_name) {
 			fpPyGILState_Release(gstate);
-			return luaL_error(L, "Failed to get attribute '%s'", key);
+			return luaL_error(L, "Failed to create Python string");
 		}
 
-		
+		PyObject* result = fpPyObject_GetAttr(wrapper->obj, attr_name);
+		Py_DECREF(attr_name);
 
-		// 如果是可调用对象，创建一个闭包
-		if (PyCallable_Check(attr)) {
-			// 创建一个新的 PyObjectWrapper 来存储可调用对象
-			PyObjectWrapper* funcWrapper = (PyObjectWrapper*)lua_newuserdata(L, sizeof(PyObjectWrapper));
-			funcWrapper->obj = attr;  // 不需要增加引用计数，因为我们直接使用了 attr
-
-			// 创建闭包
-			lua_pushcclosure(L, py_object_call, 1);
+		if (result) {
+			if (PyCallable_Check(result)) {
+				g_Console->cLog("py_object_index: 返回可调用对象", Console::EColor_green);
+				// 如果是方法，创建闭包
+				PyObjectWrapper* methodWrapper = (PyObjectWrapper*)lua_newuserdata(L, sizeof(PyObjectWrapper));
+				methodWrapper->obj = result;
+				luaL_getmetatable(L, "PyObject");
+				lua_setmetatable(L, -2);
+				lua_pushcclosure(L, py_object_call, 1);  // 创建闭包
+			} else {
+				g_Console->cLog("py_object_index: 返回普通值", Console::EColor_green);
+				// 如果是普通值，直接返回
+				PyObjectWrapper* newWrapper = (PyObjectWrapper*)lua_newuserdata(L, sizeof(PyObjectWrapper));
+				newWrapper->obj = result;
+				luaL_getmetatable(L, "PyObject");
+				lua_setmetatable(L, -2);
+			}
 		} else {
-			// 创建一个新的 Python 对象包装器
-			PyObjectWrapper* newWrapper = (PyObjectWrapper*)lua_newuserdata(L, sizeof(PyObjectWrapper));
-			newWrapper->obj = attr;
+			PyErr_Clear();
+			lua_pushnil(L);
+		}
 
-			// 设置元表
+		fpPyGILState_Release(gstate);
+		return 1;
+	}
+
+	// 处理下标访问（[]操作符）
+	int Bridge::py_object_getitem(lua_State* L) {
+		g_Console->cLog("py_object_getitem: 开始下标访问", Console::EColor_green);
+		
+		PyObjectWrapper* wrapper = (PyObjectWrapper*)luaL_checkudata(L, 1, "PyObject");
+		if (!wrapper || !wrapper->obj) {
+			return luaL_error(L, "Invalid Python object");
+		}
+
+		PyGILState_STATE gstate = fpPyGILState_Ensure();
+		PyObject* result = nullptr;
+
+		// 将键转换为Python对象
+		PyObject* key = LuaToPython(L, 2);
+		if (!key) {
+			fpPyGILState_Release(gstate);
+			return luaL_error(L, "Invalid key type");
+		}
+
+		// 尝试序列访问
+		if (PySequence_Check(wrapper->obj)) {
+			if (PyLong_Check(key)) {
+				Py_ssize_t index = PyLong_AsSsize_t(key) - 1;  // Lua 索引从 1 开始
+				if (index >= 0) {
+					result = PySequence_GetItem(wrapper->obj, index);
+				}
+			}
+		}
+		// 尝试字典访问
+		else if (PyDict_Check(wrapper->obj)) {
+			result = PyDict_GetItem(wrapper->obj, key);
+			if (result) {
+				Py_INCREF(result);  // GetItem 返回借用的引用
+			}
+		}
+
+		Py_DECREF(key);
+
+		if (result) {
+			PyObjectWrapper* newWrapper = (PyObjectWrapper*)lua_newuserdata(L, sizeof(PyObjectWrapper));
+			newWrapper->obj = result;
 			luaL_getmetatable(L, "PyObject");
 			lua_setmetatable(L, -2);
+		} else {
+			PyErr_Clear();
+			lua_pushnil(L);
 		}
 
 		fpPyGILState_Release(gstate);
@@ -232,74 +295,114 @@ namespace DX11Base {
 	}
 
 	int Bridge::py_object_call(lua_State* L) {
-		PyObjectWrapper* wrapper = (PyObjectWrapper*)lua_touserdata(L, lua_upvalueindex(1));
+		g_Console->cLog("py_object_call: 开始执行", Console::EColor_green);
 		
-		if (!wrapper || !wrapper->obj) {
-			return luaL_error(L, "Invalid Python object");
-		}
-
-		if (!PyCallable_Check(wrapper->obj)) {
-			return luaL_error(L, "Python object is not callable");
+		PyObjectWrapper* methodWrapper = (PyObjectWrapper*)lua_touserdata(L, lua_upvalueindex(1));
+		
+		if (!methodWrapper || !methodWrapper->obj) {
+			g_Console->cLog("py_object_call: 无效的Python对象", Console::EColor_red);
+			return luaL_error(L, "Invalid Python method object");
 		}
 
 		PyGILState_STATE gstate = fpPyGILState_Ensure();
 
-		// 构建参数元组
+		// 创建参数元组
 		int nargs = lua_gettop(L);
 		PyObject* args = fpPyTuple_New(nargs);
 		
-		// 转换所有参数 - 优化参数转换
-		bool hasError = false;
-		for (int i = 0; i < nargs && !hasError; i++) {
-			PyObject* arg = LuaToPython(L, i + 1);
-			if (!arg) {
-				hasError = true;
+		// 转换参数
+		for (int i = 0; i < nargs; i++) {
+			PyObject* arg;
+			if (PyObjectWrapper* wrapper = (PyObjectWrapper*)luaL_testudata(L, i + 1, "PyObject")) {
+				// 如果是 Python 对象，直接使用并增加引用计数
+				arg = wrapper->obj;
+				Py_INCREF(arg);
 			} else {
-				PyTuple_SET_ITEM(args, i, arg);  // SET_ITEM 会偷走引用，不需要 DECREF
+				// 否则转换为 Python 对象
+				arg = LuaToPython(L, i + 1);
 			}
+
+			if (!arg) {
+				Py_DECREF(args);
+				fpPyGILState_Release(gstate);
+				return luaL_error(L, "Failed to convert argument %d", i + 1);
+			}
+			PyTuple_SET_ITEM(args, i, arg);
 		}
 
-		if (hasError) {
-			Py_DECREF(args);
-			fpPyGILState_Release(gstate);
-			return luaL_error(L, "Failed to convert arguments to Python");
-		}
-
-		// 调用函数
-		PyObject* result = fpPyEval_CallObjectWithKeywords(wrapper->obj, args, NULL);
+		// 调用方法
+		PyObject* result = fpPyEval_CallObjectWithKeywords(methodWrapper->obj, args, NULL);
 		Py_DECREF(args);
 
 		if (!result) {
+			PyErr_Print();
 			fpPyGILState_Release(gstate);
-			return luaL_error(L, "Python function call failed");
+			return luaL_error(L, "Failed to call Python method");
 		}
 
-		// 创建新的 Python 对象包装器
-		PyObjectWrapper* newWrapper = (PyObjectWrapper*)lua_newuserdata(L, sizeof(PyObjectWrapper));
-		newWrapper->obj = result;  // 不需要增加引用计数，因为 result 已经是新引用
-
+		// 返回结果并确保设置了正确的元表
+		PyObjectWrapper* resultWrapper = (PyObjectWrapper*)lua_newuserdata(L, sizeof(PyObjectWrapper));
+		resultWrapper->obj = result;
 		luaL_getmetatable(L, "PyObject");
 		lua_setmetatable(L, -2);
 
+		g_Console->cLog("py_object_call: 调用完成，返回结果", Console::EColor_green);
 		fpPyGILState_Release(gstate);
 		return 1;
 	}
 
+	// 注册元表
 	void Bridge::RegisterPyObjectMetatable(lua_State* L) {
 		luaL_newmetatable(L, "PyObject");
 		
-		// 设置元方法
-		lua_pushcfunction(L, py_object_gc);
-		lua_setfield(L, -2, "__gc");
-		
-		lua_pushcfunction(L, py_object_index);
+		// 创建一个新的 C 闭包来处理 __index
+		lua_pushcfunction(L, [](lua_State* L) -> int {
+			// 检查是否是字符串键
+			if (lua_type(L, 2) == LUA_TSTRING) {
+				// 如果是字符串键，先尝试查找方法
+				luaL_getmetatable(L, "PyObject");
+				lua_getfield(L, -1, "__methods");
+				lua_pushvalue(L, 2);  // 复制键名
+				lua_gettable(L, -2);  // 在方法表中查找
+				
+				if (!lua_isnil(L, -1)) {
+					return 1;  // 如果找到了方法，直接返回
+				}
+				
+				// 如果不是方法，清理栈并进行属性访问
+				lua_pop(L, 3);
+				return py_object_index(L);
+			} else {
+				// 如果不是字符串键，使用 getitem 处理
+				return py_object_getitem(L);
+			}
+		});
 		lua_setfield(L, -2, "__index");
 		
-		// 添加 __call 元方法
-		//lua_pushcfunction(L, py_object_call);
-		//lua_setfield(L, -2, "__call");
+		// 设置其他元方法
+		luaL_Reg methods[] = {
+			{"__call", py_object_call},
+			{"__gc", py_object_gc},
+			{"__newindex", py_object_newindex},
+			{"__len", py_object_len},
+			{"__pairs", py_object_pairs},
+			{NULL, NULL}
+		};
 		
-		lua_pop(L, 1);
+		// 注册元方法
+		luaL_setfuncs(L, methods, 0);
+		
+		// 创建方法表
+		lua_newtable(L);
+		
+		// 在方法表中设置 getitem 方法（作为备用）
+		lua_pushcfunction(L, py_object_getitem);
+		lua_setfield(L, -2, "getitem");
+		
+		// 将方法表设置为 PyObject 的方法表
+		lua_setfield(L, -2, "__methods");
+		
+		lua_pop(L, 1);  // 弹出元表
 	}
 
 
@@ -581,41 +684,33 @@ namespace DX11Base {
 
 	// 实现 PyImport_Import
 	int Bridge::ImportModule(lua_State* L) {
-		if (lua_gettop(L) != 1) {
-			return luaL_error(L, "Exactly 1 argument required (module name)");
-		}
-
-		const char* moduleName = luaL_checkstring(L, 1);
-		if (!moduleName) {
-			return luaL_error(L, "Argument must be a string");
-		}
-
+		const char* name = luaL_checkstring(L, 1);
+		
 		PyGILState_STATE gstate = fpPyGILState_Ensure();
-		PyObject* module = nullptr;
-
-		try {
-			// 使用 fpPy_BuildValue 创建 Python 字符串
-			PyObject* nameObj = fpPy_BuildValue("s", moduleName);
-			if (!nameObj) {
-				fpPyGILState_Release(gstate);
-				return luaL_error(L, "Failed to convert module name to Python string");
-			}
-
-			module = fpPyImport_Import(nameObj);
-		}
-		catch (...) {
+		
+		// 创建模块名称字符串对象
+		PyObject* module_name = fpPy_BuildValue("s", name);
+		if (!module_name) {
 			fpPyGILState_Release(gstate);
-			return luaL_error(L, "Error importing Python module");
+			return luaL_error(L, "Failed to create module name string");
 		}
-
+		
+		// 导入模块
+		PyObject* module = fpPyImport_Import(module_name);
+		Py_DECREF(module_name);
+		
 		if (!module) {
+			PyErr_Print();
 			fpPyGILState_Release(gstate);
-			return luaL_error(L, "Failed to import module: %s", moduleName);
+			return luaL_error(L, "Failed to import module: %s", name);
 		}
-
-		// 转换模块对象
-		PythonToLua(L, module);
-
+		
+		// 创建模块包装器并设置元表
+		PyObjectWrapper* wrapper = (PyObjectWrapper*)lua_newuserdata(L, sizeof(PyObjectWrapper));
+		wrapper->obj = module;
+		luaL_getmetatable(L, "PyObject");
+		lua_setmetatable(L, -2);
+		
 		fpPyGILState_Release(gstate);
 		return 1;
 	}
@@ -861,7 +956,7 @@ namespace DX11Base {
 						fpPyGILState_Release(gstate);
 						return luaL_error(L, "Failed to convert table key or value");
 					}
-					PyDict_SetItem(result, key, value);
+					fpPyDict_SetItem(result, key, value);
 					Py_DECREF(key);
 					Py_DECREF(value);
 					lua_pop(L, 1);
@@ -875,7 +970,7 @@ namespace DX11Base {
 			if (PyObjectWrapper* wrapper = (PyObjectWrapper*)luaL_testudata(L, 1, "PyObject")) {
 				if (wrapper->obj) {
 					result = wrapper->obj;
-					Py_INCREF(result);
+					Py_INCREF(result);  // 增加引用计数但不输出日志
 				}
 			}
 			break;
@@ -892,13 +987,218 @@ namespace DX11Base {
 		}
 
 		// 创建新的 Python 对象包装
-		PyObjectWrapper* wrapper = (PyObjectWrapper*)lua_newuserdata(L, sizeof(PyObjectWrapper));
-		wrapper->obj = result;
+		PyObjectWrapper* newWrapper = (PyObjectWrapper*)lua_newuserdata(L, sizeof(PyObjectWrapper));
+		newWrapper->obj = result;
 
 		luaL_getmetatable(L, "PyObject");
 		lua_setmetatable(L, -2);
 
 		fpPyGILState_Release(gstate);
 		return 1;
+	}
+
+	// 处理属性设置（赋值操作）
+	int Bridge::py_object_newindex(lua_State* L) {
+		g_Console->cLog("py_object_newindex: 开始属性设置", Console::EColor_green);
+		
+		PyObjectWrapper* wrapper = (PyObjectWrapper*)luaL_checkudata(L, 1, "PyObject");
+		if (!wrapper || !wrapper->obj) {
+			return luaL_error(L, "Invalid Python object");
+		}
+
+		PyGILState_STATE gstate = fpPyGILState_Ensure();
+
+		int result = -1;
+		if (lua_type(L, 2) == LUA_TSTRING) {
+			// 处理属性赋值 (obj.attr = value)
+			const char* key = lua_tostring(L, 2);
+			PyObject* attr_name = fpPy_BuildValue("s", key);
+			if (!attr_name) {
+				fpPyGILState_Release(gstate);
+				return luaL_error(L, "Failed to create Python string for attribute name");
+			}
+
+			PyObject* value = LuaToPython(L, 3);
+			if (!value) {
+				Py_DECREF(attr_name);
+				fpPyGILState_Release(gstate);
+				return luaL_error(L, "Failed to convert value to Python");
+			}
+
+			result = fpPyObject_SetAttr(wrapper->obj, attr_name, value);
+			Py_DECREF(attr_name);
+			Py_DECREF(value);
+		} else {
+			// 处理下标赋值 (obj[key] = value)
+			PyObject* key = LuaToPython(L, 2);
+			PyObject* value = LuaToPython(L, 3);
+
+			if (!key || !value) {
+				Py_XDECREF(key);
+				Py_XDECREF(value);
+				fpPyGILState_Release(gstate);
+				return luaL_error(L, "Failed to convert key or value to Python");
+			}
+
+			if (PyDict_Check(wrapper->obj)) {
+				// 字典赋值
+				result = fpPyDict_SetItem(wrapper->obj, key, value);
+			} else if (PySequence_Check(wrapper->obj) && PyLong_Check(key)) {
+				// 序列赋值
+				Py_ssize_t index = PyLong_AsSsize_t(key) - 1;  // Lua 索引从 1 开始
+				if (index >= 0) {
+					result = PySequence_SetItem(wrapper->obj, index, value);
+				}
+			}
+
+			Py_DECREF(key);
+			Py_DECREF(value);
+		}
+
+		if (result == -1) {
+			PyErr_Clear();
+			fpPyGILState_Release(gstate);
+			return luaL_error(L, "Failed to set Python object attribute/item");
+		}
+
+		fpPyGILState_Release(gstate);
+		return 0;
+	}
+
+	// 处理长度操作（#操作符）
+	int Bridge::py_object_len(lua_State* L) {
+		g_Console->cLog("py_object_len: 开始获取长度", Console::EColor_green);
+		
+		PyObjectWrapper* wrapper = (PyObjectWrapper*)luaL_checkudata(L, 1, "PyObject");
+		if (!wrapper || !wrapper->obj) {
+			return luaL_error(L, "Invalid Python object");
+		}
+
+		PyGILState_STATE gstate = fpPyGILState_Ensure();
+
+		Py_ssize_t length = -1;
+		if (PySequence_Check(wrapper->obj)) {
+			length = PySequence_Length(wrapper->obj);
+		} else if (PyDict_Check(wrapper->obj)) {
+			length = PyDict_Size(wrapper->obj);
+		}
+
+		if (length == -1) {
+			PyErr_Clear();
+			fpPyGILState_Release(gstate);
+			return luaL_error(L, "Object does not support length operation");
+		}
+
+		lua_pushinteger(L, length);
+		fpPyGILState_Release(gstate);
+		return 1;
+	}
+
+	// 处理迭代操作（pairs和ipairs函数）
+	int Bridge::py_object_pairs(lua_State* L) {
+		g_Console->cLog("py_object_pairs: 开始迭代", Console::EColor_green);
+		
+		PyObjectWrapper* wrapper = (PyObjectWrapper*)luaL_checkudata(L, 1, "PyObject");
+		if (!wrapper || !wrapper->obj) {
+			return luaL_error(L, "Invalid Python object");
+		}
+
+		PyGILState_STATE gstate = fpPyGILState_Ensure();
+		PyObject* iter = nullptr;
+
+		if (PyDict_Check(wrapper->obj)) {
+			// 对于字典，使用 items() 方法
+			g_Console->cLog("py_object_pairs: 迭代字典", Console::EColor_green);
+			PyObject* items = PyDict_Items(wrapper->obj);
+			if (!items) {
+				fpPyGILState_Release(gstate);
+				return luaL_error(L, "Failed to get dictionary items");
+			}
+			iter = PyObject_GetIter(items);
+			Py_DECREF(items);
+		} 
+		else if (PyList_Check(wrapper->obj) || PyTuple_Check(wrapper->obj)) {
+			// 对于列表和元组，创建枚举迭代器
+			g_Console->cLog("py_object_pairs: 迭代序列", Console::EColor_green);
+			iter = PyObject_GetIter(wrapper->obj);
+			
+			// 创建一个新表来存储当前索引
+			lua_newtable(L);
+			lua_pushinteger(L, 0);  // 初始索引
+			lua_setfield(L, -2, "index");
+			
+			// 将这个表设置为迭代器的环境
+			lua_setfenv(L, -2);
+		}
+		else {
+			// 对于其他可迭代对象
+			g_Console->cLog("py_object_pairs: 迭代其他对象", Console::EColor_green);
+			iter = PyObject_GetIter(wrapper->obj);
+		}
+
+		if (!iter) {
+			PyErr_Clear();
+			fpPyGILState_Release(gstate);
+			return luaL_error(L, "Object is not iterable");
+		}
+
+		// 创建迭代器包装器
+		PyObjectWrapper* iterWrapper = (PyObjectWrapper*)lua_newuserdata(L, sizeof(PyObjectWrapper));
+		iterWrapper->obj = iter;
+		luaL_getmetatable(L, "PyObject");
+		lua_setmetatable(L, -2);
+
+		// 创建迭代函数闭包
+		lua_pushcclosure(L, py_object_next, 1);
+		lua_pushnil(L);  // 初始状态
+		lua_pushnil(L);  // 初始值
+
+		fpPyGILState_Release(gstate);
+		return 3;
+	}
+
+	// 迭代器的 next 函数
+	int Bridge::py_object_next(lua_State* L) {
+		PyObjectWrapper* iterWrapper = (PyObjectWrapper*)lua_touserdata(L, lua_upvalueindex(1));
+		if (!iterWrapper || !iterWrapper->obj) {
+			return luaL_error(L, "Invalid iterator");
+		}
+
+		PyGILState_STATE gstate = fpPyGILState_Ensure();
+
+		PyObject* item = PyIter_Next(iterWrapper->obj);
+		if (!item) {
+			if (PyErr_Occurred()) {
+				PyErr_Clear();
+			}
+			fpPyGILState_Release(gstate);
+			return 0;  // 迭代结束
+		}
+
+		if (PyTuple_Check(item) && PyTuple_Size(item) == 2) {
+			// 对于字典的 items()，返回键值对
+			PyObject* key = PyTuple_GetItem(item, 0);
+			PyObject* value = PyTuple_GetItem(item, 1);
+			PythonToLua(L, key);   // 转换键
+			PythonToLua(L, value); // 转换值
+			Py_DECREF(item);
+		} else {
+			// 对于列表和元组，返回索引和值
+			lua_getfenv(L, 1);  // 获取环境表
+			lua_getfield(L, -1, "index");
+			lua_Integer index = lua_tointeger(L, -1) + 1;
+			lua_pop(L, 1);  // 弹出旧索引
+			
+			lua_pushinteger(L, index);  // 设置新索引
+			lua_setfield(L, -2, "index");
+			lua_pop(L, 1);  // 弹出环境表
+			
+			lua_pushinteger(L, index);  // 返回索引（从1开始）
+			PythonToLua(L, item);  // 返回值
+			Py_DECREF(item);
+		}
+
+		fpPyGILState_Release(gstate);
+		return 2;
 	}
 }

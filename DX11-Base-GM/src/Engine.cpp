@@ -144,7 +144,9 @@ namespace DX11Base
 	//-----------------------------------------------------------------------------------
 #pragma region //	CONSOLE
 
-	Console::Console() { }
+	Console::Console() {
+
+	}
 	
 	Console::Console(const char* title) { InitializeConsole(title); }
 	
@@ -166,6 +168,10 @@ namespace DX11Base
 			LogError("[!] [Console::InitializeConsole] failed to initialize console.\n");
 			return;
 		}
+		// 初始化其他成员...
+		g_Console->logBuffer = ImGuiTextBuffer();
+		g_Console->AutoScroll = true;
+		g_Console->ScrollToBottom = false;
 
 		// 获取程序目录
 		char buffer[MAX_PATH];
@@ -201,36 +207,52 @@ namespace DX11Base
 		logFile << "=== GMPro Log Started at " << timestamp << " ===" << std::endl;
 		logFile.flush();
 	}
+	// 添加 Console::AddToLogBuffer 的实现
 
+	void Console::AddToLogBuffer(const char* text) {
+		if (logBuffer.size() > 0 && logBuffer.end()[-1] != '\n') {
+			logBuffer.append("\n");
+		}
+		
+		logBuffer.append(text);
+		ScrollToBottom = true;
+	}
 	//	raw print to console with desired color and formatting
-	void Console::cLog(const char* fmt, EColors color, ...)
-	{
+	void Console::cLog(const char* fmt, EColors color, ...) {
+		if (!bInit) return;
+
 		// 获取当前时间
 		SYSTEMTIME st;
 		GetLocalTime(&st);
 		
 		// 格式化时间戳
 		char timestamp[64];
-		sprintf_s(timestamp, " [%04d-%02d-%02d %02d:%02d:%02d.%03d]\t", 
-			st.wYear, st.wMonth, st.wDay,
-			st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+		sprintf_s(timestamp, "[%02d:%02d:%02d] ", 
+			st.wHour, st.wMinute, st.wSecond);
 
 		// 格式化消息内容
+		va_list args;
+		va_start(args, color);
 		char buf[1024];
-		va_list arg;
-		va_start(arg, color);
-		vsnprintf(buf, sizeof(buf), fmt, arg);
-		va_end(arg);
+		vsnprintf(buf, sizeof(buf), fmt, args);
+		va_end(args);
+
+		// 组合完整消息
+		char fullMsg[2048];
+		sprintf_s(fullMsg, "%s%s", timestamp, buf);
 
 		// 输出到控制台
-		SetConsoleTextAttribute(pHandle, static_cast<WORD>(color));
-		fprintf(pOutStream, "%s%s", timestamp, buf);
-		SetConsoleTextAttribute(pHandle, static_cast<WORD>(EColors::EColor_DEFAULT));
+		SetConsoleTextAttribute(pHandle, color);
+		printf("%s", fullMsg);
+		SetConsoleTextAttribute(pHandle, EColor_DEFAULT);
+		
+		// 输出到 ImGui 窗口
+		AddToLogBuffer(fullMsg);
 
-		// 输出到日志文件
+		// 写入日志文件
 		if (logFile.is_open()) {
 			std::lock_guard<std::mutex> lock(logMutex);
-			logFile << timestamp << buf;
+			logFile << fullMsg;
 			logFile.flush();
 		}
 	}

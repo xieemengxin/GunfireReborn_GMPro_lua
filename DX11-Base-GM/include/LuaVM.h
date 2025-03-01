@@ -25,8 +25,7 @@ namespace DX11Base
     // API函数声明
     namespace LuaAPI
     {
-        // 打印函数
-        int Print(lua_State* L);
+      
 
         // 获取游戏窗口大小
         int GetWindowSize(lua_State* L);

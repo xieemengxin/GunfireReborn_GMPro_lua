@@ -76,11 +76,21 @@ namespace DX11Base
 		static bool							bInit;
 		bool								bShow{ false };
 		bool								bVerbose{ false };
+
+		// 日志缓冲区
+
+		ImGuiTextBuffer logBuffer;
+		bool AutoScroll{true};
+		bool ScrollToBottom{false};
+
 		// 日志文件操作
+
 		std::ofstream logFile;
 		std::mutex logMutex;
 		bool isLogInitialized;
 		std::string logFilePath;
+
+		
 	public:
 		void								InitializeConsole(const char* ConsoleName, bool bShowWindow = true);
 		void								cLog(const char* fmt, EColors color = EColors::EColor_DEFAULT, ...);
@@ -100,6 +110,10 @@ namespace DX11Base
 		Console(const char* title);
 		Console(const char* title, bool bShow);
 		~Console();
+
+		// 添加日志到 IMGUI 缓冲区
+
+		void AddToLogBuffer(const char* text);
 
 	private:
 		HANDLE								pHandle{};

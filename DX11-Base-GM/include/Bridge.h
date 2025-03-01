@@ -13,7 +13,9 @@ namespace DX11Base {
 	typedef PyGILState_STATE(__stdcall* TPyGILState_Ensure)(void);
 	typedef void(__stdcall* TPyGILState_Release)(PyGILState_STATE);
 	typedef PyObject* (__stdcall* TPyObject_Str)(PyObject*);
-	typedef PyObject* (__stdcall* TPyTuple_New)(Py_ssize_t);
+	typedef PyObject* (__stdcall* TPyTuple_New)(Py_ssize_t); 
+	typedef int(__stdcall* TPyObject_SetAttr)(PyObject* , PyObject* , PyObject* );
+	typedef int(__stdcall* TPyDict_SetItem)(PyObject*, PyObject*, PyObject*);
 
 	typedef struct {
 		PyObject* obj;
@@ -33,6 +35,9 @@ namespace DX11Base {
 		static TPy_BuildValue fpPy_BuildValue;
 		static TPyObject_Str fpPyObject_Str;
 		static TPyTuple_New fpPyTuple_New;
+		static TPyObject_SetAttr fpPyObject_SetAttr;
+		static TPyDict_SetItem fpPyDict_SetItem;
+
 	public:
 		bool isInitialized();
 		bool InitPyBridge();
@@ -61,6 +66,8 @@ namespace DX11Base {
 
 		static int ToPython(lua_State* L);
 
+		static int py_object_getitem(lua_State* L);
+
 		static int py_object_call(lua_State* L);
 
 
@@ -78,6 +85,10 @@ namespace DX11Base {
 	
 		static int py_object_index(lua_State* L);
 	
+		static int py_object_newindex(lua_State* L);
+		static int py_object_len(lua_State* L);
+		static int py_object_pairs(lua_State* L);
+		static int py_object_next(lua_State* L);
 	};
 	inline std::unique_ptr<Bridge> g_Bridge;
 }

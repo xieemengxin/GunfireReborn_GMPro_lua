@@ -1,5 +1,6 @@
 #pragma once
 #include "helper.h"
+
 namespace DX11Base 
 {
 	namespace Styles {
@@ -13,11 +14,20 @@ namespace DX11Base
 	class Menu
 	{
 	public:
+		
+
+	public:
 		static void Draw();
 		static void MainMenu();
 		static void CodeEditor();
 		static void HUD();
 		static void Loops();
+
+		
+		
+		
+		// 日志窗口
+		static void DrawLogWindow();
 
 		static void Initialize();
 
