@@ -14,8 +14,13 @@ namespace DX11Base {
 	typedef void(__stdcall* TPyGILState_Release)(PyGILState_STATE);
 	typedef PyObject* (__stdcall* TPyObject_Str)(PyObject*);
 	typedef PyObject* (__stdcall* TPyTuple_New)(Py_ssize_t); 
+	typedef PyObject* (__stdcall* TPyList_New)(Py_ssize_t);
+	typedef PyDictKeysObject* (__stdcall* Tnew_keys_object)(Py_ssize_t);
+	typedef PyObject* (__stdcall* Tnew_dict)(PyDictKeysObject* , PyObject** );
 	typedef int(__stdcall* TPyObject_SetAttr)(PyObject* , PyObject* , PyObject* );
 	typedef int(__stdcall* TPyDict_SetItem)(PyObject*, PyObject*, PyObject*);
+
+
 
 	typedef struct {
 		PyObject* obj;
@@ -35,16 +40,24 @@ namespace DX11Base {
 		static TPy_BuildValue fpPy_BuildValue;
 		static TPyObject_Str fpPyObject_Str;
 		static TPyTuple_New fpPyTuple_New;
+		static TPyList_New fpPyList_New;
 		static TPyObject_SetAttr fpPyObject_SetAttr;
 		static TPyDict_SetItem fpPyDict_SetItem;
+		static Tnew_dict fpnew_dict;
+		static Tnew_keys_object fpnew_keys_object;
 
 	public:
 		bool isInitialized();
+		
 		bool InitPyBridge();
 
 		void RegisterPyObjectMetatables();
 
 	
+		//自己实现PyDict_New
+
+		static PyObject* fpPyDict_New();
+
 
 		static int BuildValue(lua_State* L);
 		void RegisterBridgeFunctions();
@@ -70,11 +83,14 @@ namespace DX11Base {
 
 		static int py_object_call(lua_State* L);
 
+		// 保留新函数
+		static int toPyBytes(lua_State* L);
+		static int toPyAuto(lua_State* L);
+		static int createPyTuple(lua_State* L);
+		static int createPyList(lua_State* L);
 
-
-
-
-		
+		// 在Bridge类中添加
+		static int createPyDict(lua_State* L);
 
 	private:
 		

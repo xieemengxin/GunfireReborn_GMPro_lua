@@ -21,10 +21,15 @@ namespace DX11Base {
 		UINT64 offset_PyObject_Str = 0x6f360;
 
 		UINT64 offset_PyTuple_New = 0xbc3a0;
+		UINT64 offset_PyList_New = 0xDFF30;
+		UINT64 offset_new_dict = 0xbe3e0;
+		UINT64 offset_new_keys_object = 0xbe170;
 
 		UINT64 offset_PyObject_SetAttr = 0x6fcf0;
 
 		UINT64 offset_PyDict_SetItem = 0xc00f0;
+
+		
 	}
 
 }

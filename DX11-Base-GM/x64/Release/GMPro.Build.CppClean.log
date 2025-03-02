@@ -1,4 +1,12 @@
+g:\cheat\gunfire\injectorwithlua\cpython-3.6.12\dx11-base-gm\x64\release\gmpro.pch
 g:\cheat\gunfire\injectorwithlua\cpython-3.6.12\dx11-base-gm\x64\release\vc143.pdb
+g:\cheat\gunfire\injectorwithlua\cpython-3.6.12\dx11-base-gm\x64\release\pch.obj
+g:\cheat\gunfire\injectorwithlua\cpython-3.6.12\dx11-base-gm\x64\release\menu.obj
+g:\cheat\gunfire\injectorwithlua\cpython-3.6.12\dx11-base-gm\x64\release\luavm.obj
+g:\cheat\gunfire\injectorwithlua\cpython-3.6.12\dx11-base-gm\x64\release\engine.obj
+g:\cheat\gunfire\injectorwithlua\cpython-3.6.12\dx11-base-gm\x64\release\bridge.obj
+g:\cheat\gunfire\injectorwithlua\cpython-3.6.12\dx11-base-gm\x64\release\source.obj
+g:\cheat\gunfire\injectorwithlua\cpython-3.6.12\dx11-base-gm\x64\release\dllmain.obj
 g:\cheat\gunfire\injectorwithlua\cpython-3.6.12\dx11-base-gm\x64\release\hookmain.obj
 g:\cheat\gunfire\injectorwithlua\cpython-3.6.12\dx11-base-gm\x64\release\imgui_widgets.obj
 g:\cheat\gunfire\injectorwithlua\cpython-3.6.12\dx11-base-gm\x64\release\imgui_tables.obj
@@ -13,14 +21,6 @@ g:\cheat\gunfire\injectorwithlua\cpython-3.6.12\dx11-base-gm\x64\release\hde64.o
 g:\cheat\gunfire\injectorwithlua\cpython-3.6.12\dx11-base-gm\x64\release\hde32.obj
 g:\cheat\gunfire\injectorwithlua\cpython-3.6.12\dx11-base-gm\x64\release\buffer.obj
 g:\cheat\gunfire\injectorwithlua\cpython-3.6.12\dx11-base-gm\x64\release\luajit.obj
-g:\cheat\gunfire\injectorwithlua\cpython-3.6.12\dx11-base-gm\x64\release\luavm.obj
-g:\cheat\gunfire\injectorwithlua\cpython-3.6.12\dx11-base-gm\x64\release\engine.obj
-g:\cheat\gunfire\injectorwithlua\cpython-3.6.12\dx11-base-gm\x64\release\bridge.obj
-g:\cheat\gunfire\injectorwithlua\cpython-3.6.12\dx11-base-gm\x64\release\menu.obj
-g:\cheat\gunfire\injectorwithlua\cpython-3.6.12\dx11-base-gm\x64\release\gmpro.pch
-g:\cheat\gunfire\injectorwithlua\cpython-3.6.12\dx11-base-gm\x64\release\pch.obj
-g:\cheat\gunfire\injectorwithlua\cpython-3.6.12\dx11-base-gm\x64\release\dllmain.obj
-g:\cheat\gunfire\injectorwithlua\cpython-3.6.12\dx11-base-gm\x64\release\source.obj
 g:\cheat\gunfire\injectorwithlua\cpython-3.6.12\dx11-base-gm\bin\x64\release\gmpro.dll
 g:\cheat\gunfire\injectorwithlua\cpython-3.6.12\dx11-base-gm\bin\x64\release\gmpro.pdb
 g:\cheat\gunfire\injectorwithlua\cpython-3.6.12\dx11-base-gm\x64\release\gmpro.ipdb

@@ -14,12 +14,24 @@ namespace DX11Base {
 	TPyGILState_Release Bridge::fpPyGILState_Release = nullptr;
 	TPyObject_Str Bridge::fpPyObject_Str = nullptr;
 	TPyTuple_New Bridge::fpPyTuple_New = nullptr;
+	TPyList_New Bridge::fpPyList_New = nullptr;
 	TPyObject_SetAttr Bridge::fpPyObject_SetAttr = nullptr;
 	TPyDict_SetItem Bridge::fpPyDict_SetItem = nullptr;
+	Tnew_dict Bridge::fpnew_dict = nullptr;
+	Tnew_keys_object Bridge::fpnew_keys_object = nullptr;
 
 	bool Bridge::isInitialized()
 	{
 		return isInitionalized;
+	}
+
+	//构造一个自己的PyDict_New
+	 #define PyDict_MINSIZE 8
+	 PyObject* Bridge::fpPyDict_New() {
+		PyDictKeysObject* keys = fpnew_keys_object(PyDict_MINSIZE);
+		if (keys == NULL)
+			return NULL;
+		return fpnew_dict(keys, NULL);
 	}
 
 
@@ -46,7 +58,12 @@ namespace DX11Base {
 		fpPyGILState_Release = (TPyGILState_Release)(m1logic4 + Offset::offset_PyGILState_Release);
 		fpPyObject_Str = (TPyObject_Str)(m1logic4 + Offset::offset_PyObject_Str);
 		fpPyTuple_New = (TPyTuple_New)(m1logic4 + Offset::offset_PyTuple_New);
+		fpPyList_New = (TPyList_New)(m1logic4 + Offset::offset_PyList_New);
+		fpnew_dict = (Tnew_dict)(m1logic4 + Offset::offset_new_dict);
+		fpnew_keys_object = (Tnew_keys_object)(m1logic4 + Offset::offset_new_keys_object);
 		fpPyObject_SetAttr = (TPyObject_SetAttr)(m1logic4 + Offset::offset_PyObject_SetAttr);
+		fpPyDict_SetItem = (TPyDict_SetItem)(m1logic4 + Offset::offset_PyDict_SetItem);
+
 		// 验证函数指针
 		if (!fpPyEval_CallObjectWithKeywords || !fpPyObject_GetAttr ||  !fpPy_BuildValue || 
 			!fpPyImport_Import || !fpPyGILState_Ensure || 
@@ -88,9 +105,18 @@ namespace DX11Base {
 		g_LuaVM->RegisterFunction("importModule", Bridge::ImportModule, "GMP");
 		g_LuaVM->RegisterFunction("toString", Bridge::ToString, "GMP");
 
-		// 注册新函数
-		g_LuaVM->RegisterFunction("toLua", Bridge::ToLua, "GMP");
-		g_LuaVM->RegisterFunction("toPython", Bridge::ToPython, "GMP");
+
+
+		// 添加新的函数注册
+		g_LuaVM->RegisterFunction("toPyBytes", toPyBytes, "GMP");
+		g_LuaVM->RegisterFunction("toPyAuto", toPyAuto, "GMP");
+
+		// 添加Python风格的元组和列表构造函数
+		g_LuaVM->RegisterFunction("tuple", createPyTuple, "GMP");
+		g_LuaVM->RegisterFunction("list", createPyList, "GMP");
+
+		// 添加Python风格的字典构造函数
+		g_LuaVM->RegisterFunction("dict", createPyDict, "GMP");
 	}
 
 	// 辅助函数：检查数字是否为整数
@@ -101,7 +127,33 @@ namespace DX11Base {
 
 	// 辅助函数：将 Lua 值转换为 Python 对象
 	PyObject* Bridge::LuaToPython(lua_State* L, int index) {
-		switch (lua_type(L, index)) {
+		// 获取 Gil 锁
+		PyGILState_STATE gstate = fpPyGILState_Ensure();
+		PyObject* result = nullptr;
+
+		// 首先检查是否已经是 PyObject
+		if (lua_isuserdata(L, index)) {
+			if (lua_getmetatable(L, index)) {  // 有元表
+				luaL_getmetatable(L, "PyObject");  // 获取 PyObject 元表
+				if (lua_rawequal(L, -1, -2)) {  // 比较两个元表
+					// 是 PyObject，直接获取并增加引用计数
+					PyObjectWrapper* wrapper = (PyObjectWrapper*)lua_touserdata(L, index);
+					if (wrapper && wrapper->obj) {
+						Py_INCREF(wrapper->obj);
+						result = wrapper->obj;
+					}
+				}
+				lua_pop(L, 2);  // 弹出两个元表
+				
+				if (result) {  // 如果找到了 PyObject，直接返回
+					fpPyGILState_Release(gstate);
+					return result;
+				}
+			}
+		}
+
+		int type = lua_type(L, index);
+		switch (type) {
 		case LUA_TNIL:
 			Py_INCREF(Py_None);
 			return Py_None;
@@ -117,8 +169,31 @@ namespace DX11Base {
 		}
 
 		case LUA_TSTRING: {
-			const char* str = lua_tostring(L, index);
-			return fpPy_BuildValue("s", str);
+			size_t len;
+			const char* str = lua_tolstring(L, index, &len);
+			
+			// 检查是否应该转换为 bytes
+			bool isBinary = false;
+			for (size_t i = 0; i < len; i++) {
+				if (str[i] == 0 || (unsigned char)str[i] > 127) {
+					isBinary = true;
+					break;
+				}
+			}
+			
+			if (isBinary) {
+				// 如果包含 null 字节或非 ASCII 字符，视为二进制数据
+				result = PyBytes_FromStringAndSize(str, len);
+			} else {
+				// 普通文本字符串
+				result = PyUnicode_DecodeUTF8(str, len, "strict");
+				if (!result) {
+					// 如果 UTF-8 解码失败，回退到 bytes
+					PyErr_Clear();
+					result = PyBytes_FromStringAndSize(str, len);
+				}
+			}
+			break;
 		}
 
 		case LUA_TUSERDATA: {
@@ -131,9 +206,96 @@ namespace DX11Base {
 			return nullptr;
 		}
 
+		case LUA_TTABLE: {
+			// 检查是否是数组
+			size_t len = lua_objlen(L, index);
+			bool isArray = true;
+			
+			// 检查是否所有键都是连续的数字
+			for (size_t i = 1; i <= len; i++) {
+				lua_rawgeti(L, index, i);
+				if (lua_isnil(L, -1)) {
+					isArray = false;
+					lua_pop(L, 1);
+					break;
+				}
+				lua_pop(L, 1);
+			}
+			
+			if (isArray && len > 0) {
+				// 转换为 Python 列表
+				result = fpPyList_New(len);
+				if (!result) {
+					fpPyGILState_Release(gstate);
+					return nullptr;
+				}
+				
+				for (size_t i = 1; i <= len; i++) {
+					lua_rawgeti(L, index, i);
+					PyObject* item = LuaToPython(L, -1);
+					lua_pop(L, 1);
+					
+					if (!item) {
+						Py_DECREF(result);
+						fpPyGILState_Release(gstate);
+						return nullptr;
+					}
+					
+					PyList_SetItem(result, i-1, item);  // 这会偷取 item 的引用
+				}
+			}
+			else {
+				// 转换为 Python 字典
+				result = fpPyDict_New();
+				if (!result) {
+					fpPyGILState_Release(gstate);
+					return nullptr;
+				}
+				
+				lua_pushnil(L);  // 第一个键
+				while (lua_next(L, index) != 0) {
+					// 键在索引 -2，值在索引 -1
+					
+					PyObject* pyKey = LuaToPython(L, -2);
+					if (!pyKey) {
+						Py_DECREF(result);
+						lua_pop(L, 1);  // 弹出值
+						fpPyGILState_Release(gstate);
+						return nullptr;
+					}
+					
+					PyObject* pyValue = LuaToPython(L, -1);
+					if (!pyValue) {
+						Py_DECREF(pyKey);
+						Py_DECREF(result);
+						lua_pop(L, 1);  // 弹出值
+						fpPyGILState_Release(gstate);
+						return nullptr;
+					}
+					
+					if (fpPyDict_SetItem(result, pyKey, pyValue) < 0) {
+						Py_DECREF(pyKey);
+						Py_DECREF(pyValue);
+						Py_DECREF(result);
+						lua_pop(L, 1);  // 弹出值
+						fpPyGILState_Release(gstate);
+						return nullptr;
+					}
+					
+					Py_DECREF(pyKey);
+					Py_DECREF(pyValue);
+					lua_pop(L, 1);  // 弹出值，保留键用于下一次迭代
+				}
+			}
+			break;
+		}
+
 		default:
 			return nullptr;
 		}
+
+		fpPyGILState_Release(gstate);
+		return result;
 	}
 
 	// 辅助函数：将 Python 对象转换为 Lua 值
@@ -791,211 +953,7 @@ namespace DX11Base {
 				return 1;
 		}
 	}
-	// 将 Python 对象转换为 Lua 值
 
-	int Bridge::ToLua(lua_State* L) {
-		if (lua_gettop(L) != 1) {
-			return luaL_error(L, "Exactly 1 argument required (python_object)");
-		}
-
-		PyObjectWrapper* wrapper = (PyObjectWrapper*)luaL_checkudata(L, 1, "PyObject");
-		if (!wrapper || !wrapper->obj) {
-			return luaL_error(L, "Invalid Python object");
-		}
-
-		PyGILState_STATE gstate = fpPyGILState_Ensure();
-
-		// 根据 Python 对象类型进行转换
-		if (PyBool_Check(wrapper->obj)) {
-			lua_pushboolean(L, wrapper->obj == Py_True);
-		}
-		else if (PyLong_Check(wrapper->obj)) {
-			lua_pushnumber(L, (lua_Number)PyLong_AsLongLong(wrapper->obj));
-		}
-		else if (PyFloat_Check(wrapper->obj)) {
-			lua_pushnumber(L, (lua_Number)PyFloat_AsDouble(wrapper->obj));
-		}
-		else if (PyUnicode_Check(wrapper->obj)) {
-			const char* str = PyUnicode_AsUTF8(wrapper->obj);
-			if (str) {;
-				lua_pushlstring(L, str, strlen(str));
-			}
-			else {
-				lua_pushnil(L);
-			}
-		}
-		else if (PyBytes_Check(wrapper->obj)) {
-			char* str;
-			Py_ssize_t len;
-			PyBytes_AsStringAndSize(wrapper->obj, &str, &len);
-			lua_pushlstring(L, str, len);
-		}
-		else if (PyList_Check(wrapper->obj)) {
-			// 转换 Python 列表为 Lua 表
-			lua_newtable(L);
-			Py_ssize_t len = PyList_Size(wrapper->obj);
-			for (Py_ssize_t i = 0; i < len; i++) {
-				PyObject* item = PyList_GetItem(wrapper->obj, i);
-				lua_pushinteger(L, i + 1);  // Lua 表索引从 1 开始
-				PythonToLua(L, item);
-				lua_settable(L, -3);
-			}
-		}
-		else if (PyTuple_Check(wrapper->obj)) {
-			// 转换 Python 元组为 Lua 表
-			lua_newtable(L);
-			Py_ssize_t len = PyTuple_Size(wrapper->obj);
-			for (Py_ssize_t i = 0; i < len; i++) {
-				PyObject* item = PyTuple_GetItem(wrapper->obj, i);
-				lua_pushinteger(L, i + 1);
-				PythonToLua(L, item);
-				lua_settable(L, -3);
-			}
-		}
-		else if (PyDict_Check(wrapper->obj)) {
-			// 转换 Python 字典为 Lua 表
-			lua_newtable(L);
-			PyObject* key, * value;
-			Py_ssize_t pos = 0;
-			while (PyDict_Next(wrapper->obj, &pos, &key, &value)) {
-				PythonToLua(L, key);    // 转换键
-				PythonToLua(L, value);  // 转换值
-				lua_settable(L, -3);
-			}
-		}
-		else {
-			// 保持为 Python 对象
-			lua_pushvalue(L, 1);
-		}
-
-		fpPyGILState_Release(gstate);
-		return 1;
-	}
-
-	// 将 Lua 值转换为 Python 对象
-	int Bridge::ToPython(lua_State* L) {
-		if (lua_gettop(L) != 1) {
-			return luaL_error(L, "Exactly 1 argument required (lua_value)");
-		}
-
-		PyGILState_STATE gstate = fpPyGILState_Ensure();
-		PyObject* result = nullptr;
-
-		switch (lua_type(L, 1)) {
-		case LUA_TNIL:
-			result = Py_None;
-			Py_INCREF(result);
-			break;
-
-		case LUA_TBOOLEAN:
-			result = lua_toboolean(L, 1) ? Py_True : Py_False;
-			Py_INCREF(result);
-			break;
-
-		case LUA_TNUMBER: {
-			lua_Number num = lua_tonumber(L, 1);
-			if (isInteger(num)) {
-				result = PyLong_FromLongLong((long long)num);
-			}
-			else {
-				result = PyFloat_FromDouble((double)num);
-			}
-			break;
-		}
-
-		case LUA_TSTRING: {
-			size_t len;
-			const char* str = lua_tolstring(L, 1, &len);
-			result = PyUnicode_FromStringAndSize(str, len);
-			break;
-		}
-
-		case LUA_TTABLE: {
-			// 检查是否是数组形式的表
-			bool isArray = true;
-			size_t len = 0;
-			lua_pushnil(L);
-			while (lua_next(L, 1) != 0) {
-				if (lua_type(L, -2) != LUA_TNUMBER ||
-					!isInteger(lua_tonumber(L, -2)) ||
-					lua_tonumber(L, -2) <= 0) {
-					isArray = false;
-				}
-				len = max(len, (size_t)lua_tonumber(L, -2));
-				lua_pop(L, 1);
-			}
-
-			if (isArray) {
-				// 转换为 Python 列表
-				result = PyList_New(len);
-				for (size_t i = 1; i <= len; i++) {
-					lua_rawgeti(L, 1, i);
-					PyObject* item = LuaToPython(L, -1);
-					if (!item) {
-						Py_DECREF(result);
-						lua_pop(L, 1);
-						fpPyGILState_Release(gstate);
-						return luaL_error(L, "Failed to convert list item at index %d", i);
-					}
-					PyList_SET_ITEM(result, i - 1, item);
-					lua_pop(L, 1);
-				}
-			}
-			else {
-				// 转换为 Python 字典
-				result = PyDict_New();
-				lua_pushnil(L);
-				while (lua_next(L, 1) != 0) {
-					PyObject* key = LuaToPython(L, -2);
-					PyObject* value = LuaToPython(L, -1);
-					if (!key || !value) {
-						Py_XDECREF(key);
-						Py_XDECREF(value);
-						Py_DECREF(result);
-						lua_pop(L, 2);
-						fpPyGILState_Release(gstate);
-						return luaL_error(L, "Failed to convert table key or value");
-					}
-					fpPyDict_SetItem(result, key, value);
-					Py_DECREF(key);
-					Py_DECREF(value);
-					lua_pop(L, 1);
-				}
-			}
-			break;
-		}
-
-		case LUA_TUSERDATA: {
-			// 如果已经是 Python 对象，直接返回
-			if (PyObjectWrapper* wrapper = (PyObjectWrapper*)luaL_testudata(L, 1, "PyObject")) {
-				if (wrapper->obj) {
-					result = wrapper->obj;
-					Py_INCREF(result);  // 增加引用计数但不输出日志
-				}
-			}
-			break;
-		}
-
-		default:
-			fpPyGILState_Release(gstate);
-			return luaL_error(L, "Unsupported Lua type: %s", lua_typename(L, lua_type(L, 1)));
-		}
-
-		if (!result) {
-			fpPyGILState_Release(gstate);
-			return luaL_error(L, "Failed to convert to Python object");
-		}
-
-		// 创建新的 Python 对象包装
-		PyObjectWrapper* newWrapper = (PyObjectWrapper*)lua_newuserdata(L, sizeof(PyObjectWrapper));
-		newWrapper->obj = result;
-
-		luaL_getmetatable(L, "PyObject");
-		lua_setmetatable(L, -2);
-
-		fpPyGILState_Release(gstate);
-		return 1;
-	}
 
 	// 处理属性设置（赋值操作）
 	int Bridge::py_object_newindex(lua_State* L) {
@@ -1200,5 +1158,548 @@ namespace DX11Base {
 
 		fpPyGILState_Release(gstate);
 		return 2;
+	}
+
+	// 添加一个新函数用于创建 Python bytes 对象
+
+	 int Bridge::toPyBytes(lua_State* L) {
+		size_t len;
+		const char* data = luaL_checklstring(L, 1, &len);
+		if (!data) {
+			luaL_error(L, "需要提供字符串作为参数");
+			return 0;
+		}
+
+		PyGILState_STATE gstate = Bridge::fpPyGILState_Ensure();
+		
+		// 创建 Python bytes 对象
+		PyObject* bytes = PyBytes_FromStringAndSize(data, len);
+		if (!bytes) {
+			Bridge::fpPyGILState_Release(gstate);
+			luaL_error(L, "创建 Python bytes 对象失败");
+			return 0;
+		}
+		
+		// 创建 PyObject 包装器并返回给 Lua
+		PyObjectWrapper* wrapper = (PyObjectWrapper*)lua_newuserdata(L, sizeof(PyObjectWrapper));
+		wrapper->obj = bytes;
+		
+		// 设置元表
+		luaL_getmetatable(L, "PyObject");
+		lua_setmetatable(L, -2);
+		
+		Bridge::fpPyGILState_Release(gstate);
+		return 1;
+	}
+
+	// 自动将Lua表转换为合适的Python数据结构（列表、元组或字典）
+	int Bridge::toPyAuto(lua_State* L) {
+		if (!lua_istable(L, 1)) {
+			luaL_error(L, "需要提供表作为参数");
+			return 0;
+		}
+		
+		// 检查是否有第二个参数指定类型
+		const char* typeHint = nullptr;
+		if (lua_isstring(L, 2)) {
+			typeHint = lua_tostring(L, 2);
+		}
+		
+		PyGILState_STATE gstate = fpPyGILState_Ensure();
+		
+		// 检查表的结构特征
+		size_t len = lua_objlen(L, 1);
+		bool isSequential = true;
+		
+		// 只有长度大于0的表才需要检查是否是序列
+		if (len > 0) {
+			// 检查是否所有键从1到len都有值
+			for (size_t i = 1; i <= len; i++) {
+				lua_rawgeti(L, 1, i);
+				if (lua_isnil(L, -1)) {
+					isSequential = false;
+					lua_pop(L, 1);
+					break;
+				}
+				lua_pop(L, 1);
+			}
+			
+			// 检查是否有非数字键
+			if (isSequential) {
+				lua_pushnil(L);
+				while (lua_next(L, 1) != 0) {
+					// 检查键是否是数字，且是否在1到len的范围内
+					if (lua_isnumber(L, -2)) {
+						int idx = lua_tointeger(L, -2);
+						if (idx < 1 || idx > len) {
+							isSequential = false;
+						}
+					} else {
+						isSequential = false;
+					}
+					lua_pop(L, 1);  // 弹出值，保留键
+					if (!isSequential) break;
+				}
+			}
+		}
+		
+		PyObject* result = nullptr;
+		
+		// 根据表的特征和类型提示创建合适的Python对象
+		if (isSequential) {
+			if (typeHint && strcmp(typeHint, "tuple") == 0) {
+				// 创建元组
+				result = fpPyTuple_New(len);
+				if (!result) {
+					fpPyGILState_Release(gstate);
+					luaL_error(L, "创建Python元组失败");
+					return 0;
+				}
+				
+				for (size_t i = 1; i <= len; i++) {
+					lua_rawgeti(L, 1, i);
+					
+					// 递归处理嵌套表
+					if (lua_istable(L, -1)) {
+						// 保存当前堆栈
+						int top = lua_gettop(L);
+						
+						// 调用自身处理嵌套表
+						lua_pushcfunction(L, toPyAuto);
+						lua_pushvalue(L, -2);  // 复制表到栈顶
+						lua_call(L, 1, 1);     // 调用toPyAuto(table)
+						
+						// 获取结果
+						if (lua_isuserdata(L, -1)) {
+							PyObjectWrapper* wrapper = (PyObjectWrapper*)lua_touserdata(L, -1);
+							if (wrapper && wrapper->obj) {
+								PyTuple_SetItem(result, i-1, wrapper->obj);
+								wrapper->obj = nullptr;  // 防止自动清理
+							}
+						}
+						
+						lua_settop(L, top);  // 恢复堆栈
+					} else {
+						// 直接转换非表值
+						PyObject* item = LuaToPython(L, -1);
+						if (!item) {
+							Py_DECREF(result);
+							lua_pop(L, 1);
+							fpPyGILState_Release(gstate);
+							luaL_error(L, "转换嵌套值失败");
+							return 0;
+						}
+						PyTuple_SetItem(result, i-1, item);
+					}
+					
+					lua_pop(L, 1);  // 弹出表项
+				}
+			} else {
+				// 默认创建列表
+				result = fpPyList_New(len);
+				if (!result) {
+					fpPyGILState_Release(gstate);
+					luaL_error(L, "创建Python列表失败");
+					return 0;
+				}
+				
+				for (size_t i = 1; i <= len; i++) {
+					lua_rawgeti(L, 1, i);
+					
+					// 递归处理嵌套表
+					if (lua_istable(L, -1)) {
+						// 保存当前堆栈
+						int top = lua_gettop(L);
+						
+						// 调用自身处理嵌套表
+						lua_pushcfunction(L, toPyAuto);
+						lua_pushvalue(L, -2);  // 复制表到栈顶
+						lua_call(L, 1, 1);     // 调用toPyAuto(table)
+						
+						// 获取结果
+						if (lua_isuserdata(L, -1)) {
+							PyObjectWrapper* wrapper = (PyObjectWrapper*)lua_touserdata(L, -1);
+							if (wrapper && wrapper->obj) {
+								PyList_SetItem(result, i-1, wrapper->obj);
+								wrapper->obj = nullptr;  // 防止自动清理
+							}
+						}
+						
+						lua_settop(L, top);  // 恢复堆栈
+					} else {
+						// 直接转换非表值
+						PyObject* item = LuaToPython(L, -1);
+						if (!item) {
+							Py_DECREF(result);
+							lua_pop(L, 1);
+							fpPyGILState_Release(gstate);
+							luaL_error(L, "转换嵌套值失败");
+							return 0;
+						}
+						PyList_SetItem(result, i-1, item);
+					}
+					
+					lua_pop(L, 1);  // 弹出表项
+				}
+			}
+		} else {
+			// 创建字典
+			result = fpPyDict_New();
+			if (!result) {
+				fpPyGILState_Release(gstate);
+				luaL_error(L, "创建Python字典失败");
+				return 0;
+			}
+			
+			lua_pushnil(L);  // 第一个键
+			while (lua_next(L, 1) != 0) {
+				// 处理键
+				PyObject* pyKey = nullptr;
+				
+				// 检查键是否已经是 PyObject
+				if (lua_isuserdata(L, -2)) {
+					if (lua_getmetatable(L, -2)) {
+						luaL_getmetatable(L, "PyObject");
+						if (lua_rawequal(L, -1, -2)) {
+							PyObjectWrapper* wrapper = (PyObjectWrapper*)lua_touserdata(L, -2);
+							if (wrapper && wrapper->obj) {
+								Py_INCREF(wrapper->obj);
+								pyKey = wrapper->obj;
+							}
+						}
+						lua_pop(L, 2);  // 弹出两个元表
+					}
+				}
+				
+				// 如果键不是 PyObject，则转换它
+				if (!pyKey) {
+					pyKey = LuaToPython(L, -2);
+				}
+				
+				if (!pyKey) {
+					Py_DECREF(result);
+					fpPyGILState_Release(gstate);
+					lua_pop(L, 1);  // 弹出值
+					luaL_error(L, "转换键失败");
+					return 0;
+				}
+				
+				// 处理值
+				PyObject* pyValue = nullptr;
+				
+				// 首先检查值是否已经是 PyObject
+				if (lua_isuserdata(L, -1)) {
+					if (lua_getmetatable(L, -1)) {
+						luaL_getmetatable(L, "PyObject");
+						if (lua_rawequal(L, -1, -2)) {
+							PyObjectWrapper* wrapper = (PyObjectWrapper*)lua_touserdata(L, -1);
+							if (wrapper && wrapper->obj) {
+								Py_INCREF(wrapper->obj);
+								pyValue = wrapper->obj;
+							}
+						}
+						lua_pop(L, 2);  // 弹出两个元表
+					}
+				}
+				// 如果不是 PyObject，但是表，则递归处理
+				else if (lua_istable(L, -1)) {
+					// 保存当前状态
+					int top = lua_gettop(L);
+					
+					// 调用自身处理嵌套表
+					lua_pushcfunction(L, toPyAuto);
+					lua_pushvalue(L, -2);  // 复制表到栈顶
+					if (lua_pcall(L, 1, 1, 0) != 0) {  // 使用 pcall 而不是 call，以捕获可能的错误
+						const char* error = lua_tostring(L, -1);
+						Py_DECREF(pyKey);
+						Py_DECREF(result);
+						fpPyGILState_Release(gstate);
+						lua_pop(L, 1);  // 弹出错误消息
+						luaL_error(L, "递归处理表失败: %s", error ? error : "未知错误");
+						return 0;
+					}
+					
+					// 获取结果
+					if (lua_isuserdata(L, -1)) {
+						PyObjectWrapper* wrapper = (PyObjectWrapper*)lua_touserdata(L, -1);
+						if (wrapper && wrapper->obj) {
+							pyValue = wrapper->obj;
+							Py_INCREF(pyValue);  // 增加引用计数，因为我们会在后面手动减少
+						}
+					}
+					
+					// 恢复堆栈
+					lua_settop(L, top);  // 恢复堆栈，但保留键值对
+				}
+				// 否则尝试直接转换
+				else {
+					pyValue = LuaToPython(L, -1);
+				}
+				
+				if (!pyValue) {
+					Py_DECREF(pyKey);
+					Py_DECREF(result);
+					fpPyGILState_Release(gstate);
+					lua_pop(L, 1);  // 弹出值
+					luaL_error(L, "转换值失败");
+					return 0;
+				}
+				
+				// 添加键值对到字典
+				if (fpPyDict_SetItem(result, pyKey, pyValue) < 0) {
+					Py_DECREF(pyKey);
+					Py_DECREF(pyValue);
+					Py_DECREF(result);
+					fpPyGILState_Release(gstate);
+					lua_pop(L, 1);  // 弹出值
+					luaL_error(L, "添加键值对到字典失败");
+					return 0;
+				}
+				
+				// 减少引用计数
+				Py_DECREF(pyKey);
+				Py_DECREF(pyValue);
+				
+				// 弹出值，保留键用于下一次迭代
+				lua_pop(L, 1);
+			}
+		}
+		
+		// 创建PyObject包装器并返回
+		PyObjectWrapper* wrapper = (PyObjectWrapper*)lua_newuserdata(L, sizeof(PyObjectWrapper));
+		wrapper->obj = result;
+		
+		luaL_getmetatable(L, "PyObject");
+		lua_setmetatable(L, -2);
+		
+		fpPyGILState_Release(gstate);
+		return 1;
+	}
+
+	// 创建Python元组 - 支持多参数调用，模拟Python的元组语法
+	int Bridge::createPyTuple(lua_State* L) {
+		int nargs = lua_gettop(L);  // 获取参数数量
+		
+		PyGILState_STATE gstate = fpPyGILState_Ensure();
+		
+		// 创建Python元组
+		PyObject* tuple = fpPyTuple_New(nargs);
+		if (!tuple) {
+			fpPyGILState_Release(gstate);
+			luaL_error(L, "创建Python元组失败");
+			return 0;
+		}
+		
+		// 将所有参数添加到元组中
+		for (int i = 0; i < nargs; i++) {
+			PyObject* item = nullptr;
+			
+			// 检查是否已经是PyObject
+			if (lua_isuserdata(L, i+1)) {
+				if (lua_getmetatable(L, i+1)) {
+					luaL_getmetatable(L, "PyObject");
+					if (lua_rawequal(L, -1, -2)) {
+						PyObjectWrapper* wrapper = (PyObjectWrapper*)lua_touserdata(L, i+1);
+						if (wrapper && wrapper->obj) {
+							Py_INCREF(wrapper->obj);
+							item = wrapper->obj;
+						}
+					}
+					lua_pop(L, 2);
+				}
+			}
+			
+			// 如果不是PyObject，转换它
+			if (!item) {
+				item = LuaToPython(L, i+1);
+			}
+			
+			if (!item) {
+				Py_DECREF(tuple);
+				fpPyGILState_Release(gstate);
+				luaL_error(L, "转换参数 %d 失败", i+1);
+				return 0;
+			}
+			
+			PyTuple_SetItem(tuple, i, item);  // 偷取引用
+		}
+		
+		// 创建PyObject包装器并返回
+		PyObjectWrapper* wrapper = (PyObjectWrapper*)lua_newuserdata(L, sizeof(PyObjectWrapper));
+		wrapper->obj = tuple;
+		
+		luaL_getmetatable(L, "PyObject");
+		lua_setmetatable(L, -2);
+		
+		fpPyGILState_Release(gstate);
+		return 1;
+	}
+
+	// 创建Python列表 - 支持多参数调用，模拟Python的列表语法
+	int Bridge::createPyList(lua_State* L) {
+		int nargs = lua_gettop(L);  // 获取参数数量
+		
+		PyGILState_STATE gstate = fpPyGILState_Ensure();
+		
+		// 创建Python列表
+		PyObject* list = fpPyList_New(nargs);
+		if (!list) {
+			fpPyGILState_Release(gstate);
+			luaL_error(L, "创建Python列表失败");
+			return 0;
+		}
+		
+		// 将所有参数添加到列表中
+		for (int i = 0; i < nargs; i++) {
+			PyObject* item = nullptr;
+			
+			// 检查是否已经是PyObject
+			if (lua_isuserdata(L, i+1)) {
+				if (lua_getmetatable(L, i+1)) {
+					luaL_getmetatable(L, "PyObject");
+					if (lua_rawequal(L, -1, -2)) {
+						PyObjectWrapper* wrapper = (PyObjectWrapper*)lua_touserdata(L, i+1);
+						if (wrapper && wrapper->obj) {
+							Py_INCREF(wrapper->obj);
+							item = wrapper->obj;
+						}
+					}
+					lua_pop(L, 2);
+				}
+			}
+			
+			// 如果不是PyObject，转换它
+			if (!item) {
+				item = LuaToPython(L, i+1);
+			}
+			
+			if (!item) {
+				Py_DECREF(list);
+				fpPyGILState_Release(gstate);
+				luaL_error(L, "转换参数 %d 失败", i+1);
+				return 0;
+			}
+			
+			PyList_SetItem(list, i, item);  // 偷取引用
+		}
+		
+		// 创建PyObject包装器并返回
+		PyObjectWrapper* wrapper = (PyObjectWrapper*)lua_newuserdata(L, sizeof(PyObjectWrapper));
+		wrapper->obj = list;
+		
+		luaL_getmetatable(L, "PyObject");
+		lua_setmetatable(L, -2);
+		
+		fpPyGILState_Release(gstate);
+		return 1;
+	}
+
+	// 创建Python字典 - 支持键值对参数，键和值交替出现
+	int Bridge::createPyDict(lua_State* L) {
+		int nargs = lua_gettop(L);
+		
+		// 检查参数数量是否为偶数（键值对）
+		if (nargs % 2 != 0) {
+			luaL_error(L, "字典函数需要偶数个参数（键值对）");
+			return 0;
+		}
+		
+		PyGILState_STATE gstate = fpPyGILState_Ensure();
+		
+		// 创建Python字典
+		PyObject* dict = fpPyDict_New();
+		if (!dict) {
+			fpPyGILState_Release(gstate);
+			luaL_error(L, "创建Python字典失败");
+			return 0;
+		}
+		
+		// 添加键值对
+		for (int i = 0; i < nargs; i += 2) {
+			// 处理键（奇数索引参数）
+			PyObject* key = nullptr;
+			
+			// 检查键是否已经是PyObject
+			if (lua_isuserdata(L, i+1)) {
+				if (lua_getmetatable(L, i+1)) {
+					luaL_getmetatable(L, "PyObject");
+					if (lua_rawequal(L, -1, -2)) {
+						PyObjectWrapper* wrapper = (PyObjectWrapper*)lua_touserdata(L, i+1);
+						if (wrapper && wrapper->obj) {
+							Py_INCREF(wrapper->obj);
+							key = wrapper->obj;
+						}
+					}
+					lua_pop(L, 2);
+				}
+			}
+			
+			// 如果键不是PyObject，转换它
+			if (!key) {
+				key = LuaToPython(L, i+1);
+			}
+			
+			if (!key) {
+				Py_DECREF(dict);
+				fpPyGILState_Release(gstate);
+				luaL_error(L, "转换字典键失败（参数 %d）", i+1);
+				return 0;
+			}
+			
+			// 处理值（偶数索引参数）
+			PyObject* value = nullptr;
+			
+			// 检查值是否已经是PyObject
+			if (lua_isuserdata(L, i+2)) {
+				if (lua_getmetatable(L, i+2)) {
+					luaL_getmetatable(L, "PyObject");
+					if (lua_rawequal(L, -1, -2)) {
+						PyObjectWrapper* wrapper = (PyObjectWrapper*)lua_touserdata(L, i+2);
+						if (wrapper && wrapper->obj) {
+							Py_INCREF(wrapper->obj);
+							value = wrapper->obj;
+						}
+					}
+					lua_pop(L, 2);
+				}
+			}
+			
+			// 如果值不是PyObject，转换它
+			if (!value) {
+				value = LuaToPython(L, i+2);
+			}
+			
+			if (!value) {
+				Py_DECREF(key);
+				Py_DECREF(dict);
+				fpPyGILState_Release(gstate);
+				luaL_error(L, "转换字典值失败（参数 %d）", i+2);
+				return 0;
+			}
+			
+			// 添加键值对到字典
+			if (fpPyDict_SetItem(dict, key, value) < 0) {
+				Py_DECREF(key);
+				Py_DECREF(value);
+				Py_DECREF(dict);
+				fpPyGILState_Release(gstate);
+				luaL_error(L, "添加键值对到字典失败");
+				return 0;
+			}
+			
+			// PyDict_SetItem 不会偷取引用，所以需要减少引用计数
+			Py_DECREF(key);
+			Py_DECREF(value);
+		}
+		
+		// 创建PyObject包装器并返回
+		PyObjectWrapper* wrapper = (PyObjectWrapper*)lua_newuserdata(L, sizeof(PyObjectWrapper));
+		wrapper->obj = dict;
+		
+		luaL_getmetatable(L, "PyObject");
+		lua_setmetatable(L, -2);
+		
+		fpPyGILState_Release(gstate);
+		return 1;
 	}
 }
