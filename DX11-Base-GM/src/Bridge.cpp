@@ -19,6 +19,8 @@ namespace DX11Base {
 	TPyDict_SetItem Bridge::fpPyDict_SetItem = nullptr;
 	Tnew_dict Bridge::fpnew_dict = nullptr;
 	Tnew_keys_object Bridge::fpnew_keys_object = nullptr;
+	TPyObject_SetItem Bridge::fpPyObject_SetItem = nullptr;
+	TPyTuple_SetItem Bridge::fpPyTuple_SetItem = nullptr;
 
 	bool Bridge::isInitialized()
 	{
@@ -63,6 +65,8 @@ namespace DX11Base {
 		fpnew_keys_object = (Tnew_keys_object)(m1logic4 + Offset::offset_new_keys_object);
 		fpPyObject_SetAttr = (TPyObject_SetAttr)(m1logic4 + Offset::offset_PyObject_SetAttr);
 		fpPyDict_SetItem = (TPyDict_SetItem)(m1logic4 + Offset::offset_PyDict_SetItem);
+		fpPyObject_SetItem = (TPyObject_SetItem)(m1logic4 + Offset::offset_PObject_SetItem);
+		fpPyTuple_SetItem = (TPyTuple_SetItem)(m1logic4 + Offset::offset_PyTuple_SetItem);
 
 		// 验证函数指针
 		if (!fpPyEval_CallObjectWithKeywords || !fpPyObject_GetAttr ||  !fpPy_BuildValue || 
@@ -117,6 +121,9 @@ namespace DX11Base {
 
 		// 添加Python风格的字典构造函数
 		g_LuaVM->RegisterFunction("dict", createPyDict, "GMP");
+
+		// 注册setattr函数
+		g_LuaVM->RegisterFunction("setattr", py_object_set_attr, "GMP");
 	}
 
 	// 辅助函数：检查数字是否为整数
@@ -489,7 +496,7 @@ namespace DX11Base {
 				fpPyGILState_Release(gstate);
 				return luaL_error(L, "Failed to convert argument %d", i + 1);
 			}
-			PyTuple_SET_ITEM(args, i, arg);
+			fpPyTuple_SetItem(args, i, arg);
 		}
 
 		// 调用方法
@@ -508,7 +515,7 @@ namespace DX11Base {
 		luaL_getmetatable(L, "PyObject");
 		lua_setmetatable(L, -2);
 
-		g_Console->cLog("py_object_call: 调用完成，返回结果", Console::EColor_green);
+		g_Console->cLog("py_object_call: 调用完成，返回结果 %s", Console::EColor_green,fpPyObject_Str(result));
 		fpPyGILState_Release(gstate);
 		return 1;
 	}
@@ -959,67 +966,183 @@ namespace DX11Base {
 	int Bridge::py_object_newindex(lua_State* L) {
 		g_Console->cLog("py_object_newindex: 开始属性设置", Console::EColor_green);
 		
+		// 检查并获取 Python 对象（第一个参数）
 		PyObjectWrapper* wrapper = (PyObjectWrapper*)luaL_checkudata(L, 1, "PyObject");
 		if (!wrapper || !wrapper->obj) {
-			return luaL_error(L, "Invalid Python object");
+			g_Console->cLog("错误: 无效的 PyObject", Console::EColor_red);
+			return luaL_error(L, "参数 #1 必须是有效的 PyObject");
 		}
-
+		
+		// 检查属性名（第二个参数）
+		if (!lua_isstring(L, 2)) {
+			g_Console->cLog("错误: 属性名必须是字符串", Console::EColor_red);
+			return luaL_error(L, "参数 #2 必须是字符串属性名");
+		}
+		
+		const char* key = lua_tostring(L, 2);
+		g_Console->cLog("py_object_newindex: 属性名 '%s'", Console::EColor_green, key);
+		
+		// 首先确定值的类型（第三个参数）
+		int valueType = lua_type(L, 3);
+		g_Console->cLog("py_object_newindex: 值类型 %s", Console::EColor_green, lua_typename(L, valueType));
+		
+		// 获取 GIL
 		PyGILState_STATE gstate = fpPyGILState_Ensure();
+		
+		// 创建属性名 PyObject
+		PyObject* pyKey = fpPy_BuildValue("s", key);
+		if (!pyKey) {
+			g_Console->cLog("错误: 创建属性名失败", Console::EColor_red);
+			fpPyGILState_Release(gstate);
+			return luaL_error(L, "创建 Python 属性名失败");
+		}
+		
+		// 根据值类型选择处理方式
+		PyObject* pyValue = nullptr;
+		
+		switch (valueType) {
+		case LUA_TNIL:
+			// nil 值转换为 Python None
+			Py_INCREF(Py_None);
+			pyValue = Py_None;
+			g_Console->cLog("py_object_newindex: nil -> None", Console::EColor_green);
+			break;
 
-		int result = -1;
-		if (lua_type(L, 2) == LUA_TSTRING) {
-			// 处理属性赋值 (obj.attr = value)
-			const char* key = lua_tostring(L, 2);
-			PyObject* attr_name = fpPy_BuildValue("s", key);
-			if (!attr_name) {
-				fpPyGILState_Release(gstate);
-				return luaL_error(L, "Failed to create Python string for attribute name");
+		case LUA_TBOOLEAN:
+			// 布尔值转换为 Python True/False
+			if (lua_toboolean(L, 3)) {
+				Py_INCREF(Py_True);
+				pyValue = Py_True;
+			}
+			else {
+				Py_INCREF(Py_False);
+				pyValue = Py_False;
+			}
+			g_Console->cLog("py_object_newindex: boolean -> %s", Console::EColor_green,
+				lua_toboolean(L, 3) ? "True" : "False");
+			break;
+
+		case LUA_TNUMBER:
+			// 数字类型 - 不使用 lua_isinteger，直接转换为双精度
+		{
+			lua_Number n = lua_tonumber(L, 3);
+			pyValue = fpPy_BuildValue("d", n);
+			g_Console->cLog("py_object_newindex: number %f", Console::EColor_green, n);
+		}
+		break;
+
+		case LUA_TSTRING:
+			// 字符串类型
+		{
+			size_t len;
+			const char* s = lua_tolstring(L, 3, &len);
+			pyValue = fpPy_BuildValue("s#", s, len);
+			g_Console->cLog("py_object_newindex: string \"%s\"", Console::EColor_green, s);
+		}
+		break;
+
+		case LUA_TUSERDATA:
+			// 检查是否是 PyObject
+		{
+			g_Console->cLog("检查是否是PyObject...", Console::EColor_green);
+
+			if (!luaL_testudata(L, 3, "PyObject")) {
+				g_Console->cLog("值不是PyObject，尝试通用转换", Console::EColor_yellow);
+				pyValue = LuaToPython(L, 3);
+				break;
 			}
 
-			PyObject* value = LuaToPython(L, 3);
-			if (!value) {
-				Py_DECREF(attr_name);
-				fpPyGILState_Release(gstate);
-				return luaL_error(L, "Failed to convert value to Python");
+			PyObjectWrapper* valuewrapper = (PyObjectWrapper*)lua_touserdata(L, 3);
+			if (!valuewrapper) {
+				g_Console->cLog("获取userdata失败", Console::EColor_red);
+				break;
 			}
 
-			result = fpPyObject_SetAttr(wrapper->obj, attr_name, value);
-			Py_DECREF(attr_name);
-			Py_DECREF(value);
-		} else {
-			// 处理下标赋值 (obj[key] = value)
-			PyObject* key = LuaToPython(L, 2);
-			PyObject* value = LuaToPython(L, 3);
-
-			if (!key || !value) {
-				Py_XDECREF(key);
-				Py_XDECREF(value);
-				fpPyGILState_Release(gstate);
-				return luaL_error(L, "Failed to convert key or value to Python");
+			if (!valuewrapper->obj) {
+				g_Console->cLog("PyObject为空", Console::EColor_red);
+				break;
 			}
 
-			if (PyDict_Check(wrapper->obj)) {
-				// 字典赋值
-				result = fpPyDict_SetItem(wrapper->obj, key, value);
-			} else if (PySequence_Check(wrapper->obj) && PyLong_Check(key)) {
-				// 序列赋值
-				Py_ssize_t index = PyLong_AsSsize_t(key) - 1;  // Lua 索引从 1 开始
-				if (index >= 0) {
-					result = PySequence_SetItem(wrapper->obj, index, value);
+			// 检查对象类型，确保它是有效的
+			g_Console->cLog("获取对象类型信息...", Console::EColor_green);
+			PyObject* objType = PyObject_Type(valuewrapper->obj);
+			if (objType) {
+				PyObject* typeName = PyObject_GetAttrString(objType, "__name__");
+				if (typeName) {
+					const char* typeStr = PyUnicode_AsUTF8(typeName);
+					g_Console->cLog("PyObject类型: %s", Console::EColor_green, typeStr ? typeStr : "未知");
+					Py_DECREF(typeName);
 				}
+				Py_DECREF(objType);
 			}
 
-			Py_DECREF(key);
-			Py_DECREF(value);
+			// 检查引用计数
+			Py_ssize_t refCount = Py_REFCNT(valuewrapper->obj);
+			g_Console->cLog("PyObject引用计数: %zd", Console::EColor_green, refCount);
+
+			// 安全地增加引用计数并使用对象
+			pyValue = valuewrapper->obj;
+			Py_INCREF(pyValue);
+			g_Console->cLog("已增加引用计数", Console::EColor_green);
+
+			// 尝试打印对象内容
+			PyObject* strRep = fpPyObject_Str(pyValue);
+			if (strRep) {
+				const char* strValue = PyUnicode_AsUTF8(strRep);
+				g_Console->cLog("PyObject值: %s", Console::EColor_green, strValue ? strValue : "无法显示");
+				Py_DECREF(strRep);
+			}
+			else {
+				g_Console->cLog("无法获取PyObject字符串表示", Console::EColor_yellow);
+				PyErr_Clear();
+			}
+
+			break;
 		}
 
-		if (result == -1) {
+		case LUA_TTABLE:
+			// 表类型，使用通用转换
+		{	g_Console->cLog("py_object_newindex: 表类型，使用通用转换", Console::EColor_green);
+			pyValue = LuaToPython(L, 3);
+			break;
+		}
+				
+		default:
+			// 其他类型，尝试通用转换
+		{
+			g_Console->cLog("py_object_newindex: 其他类型 %s，尝试通用转换", Console::EColor_yellow,
+				lua_typename(L, valueType));
+			pyValue = LuaToPython(L, 3);
+			break;
+		}
+		}
+		
+		// 检查值是否转换成功
+		if (!pyValue) {
+			g_Console->cLog("错误: 值转换失败", Console::EColor_red);
+			Py_DECREF(pyKey);
+			fpPyGILState_Release(gstate);
+			return luaL_error(L, "无法将值转换为 Python 对象");
+		}
+		
+		// 设置属性
+		g_Console->cLog("py_object_newindex: 执行 SetAttr", Console::EColor_green);
+		int result = fpPyObject_SetAttr(wrapper->obj, pyKey, pyValue);
+		
+		// 清理引用
+		Py_DECREF(pyKey);
+		Py_DECREF(pyValue);
+		
+		if (result < 0) {
+			g_Console->cLog("错误: SetAttr 失败", Console::EColor_red);
+			PrintPythonError("SetAttr");
 			PyErr_Clear();
 			fpPyGILState_Release(gstate);
-			return luaL_error(L, "Failed to set Python object attribute/item");
+			return luaL_error(L, "设置 Python 对象属性 '%s' 失败", key);
 		}
-
+		
 		fpPyGILState_Release(gstate);
+		g_Console->cLog("py_object_newindex: 属性设置成功", Console::EColor_green);
 		return 0;
 	}
 
@@ -1398,7 +1521,7 @@ namespace DX11Base {
 								pyValue = wrapper->obj;
 							}
 						}
-						lua_pop(L, 2);  // 弹出两个元表
+						lua_pop(L, 2);
 					}
 				}
 				// 如果不是 PyObject，但是表，则递归处理
@@ -1451,7 +1574,6 @@ namespace DX11Base {
 					Py_DECREF(pyValue);
 					Py_DECREF(result);
 					fpPyGILState_Release(gstate);
-					lua_pop(L, 1);  // 弹出值
 					luaL_error(L, "添加键值对到字典失败");
 					return 0;
 				}
@@ -1701,5 +1823,280 @@ namespace DX11Base {
 		
 		fpPyGILState_Release(gstate);
 		return 1;
+	}
+
+	// 添加一个辅助函数来打印Python错误信息
+	void Bridge::PrintPythonError(const char* context) {
+		if (!PyErr_Occurred()) {
+			return;
+		}
+		
+		PyGILState_STATE gstate = fpPyGILState_Ensure();
+		
+		PyObject* type, *value, *traceback;
+		PyErr_Fetch(&type, &value, &traceback);
+		PyErr_NormalizeException(&type, &value, &traceback);
+		
+		if (type && value) {
+			PyObject* str_value = fpPyObject_Str(value);
+			if (str_value) {
+				const char* error_msg = PyUnicode_AsUTF8(str_value);
+				g_Console->cLog("[Python错误 in %s] %s", Console::EColor_red, context, 
+							   error_msg ? error_msg : "未知错误");
+				Py_DECREF(str_value);
+			}
+			
+			if (traceback) {
+				// 使用函数指针创建字符串和导入模块
+				PyObject* module_name = fpPy_BuildValue("s", "traceback");
+				PyObject* traceback_module = fpPyImport_Import(module_name);
+				Py_DECREF(module_name);
+				
+				if (traceback_module) {
+					// 获取格式化异常函数
+					PyObject* format_func = PyObject_GetAttrString(traceback_module, "format_exception");
+					if (format_func && PyCallable_Check(format_func)) {
+						// 创建参数元组
+						PyObject* format_args = fpPyTuple_New(3);
+						Py_INCREF(type);
+						Py_INCREF(value);
+						Py_INCREF(traceback);
+						PyTuple_SetItem(format_args, 0, type);
+						PyTuple_SetItem(format_args, 1, value);
+						PyTuple_SetItem(format_args, 2, traceback);
+						
+						// 调用函数
+						PyObject* traceback_list = PyObject_CallObject(format_func, format_args);
+						Py_DECREF(format_args);
+						
+						if (traceback_list) {
+							g_Console->cLog("\n===== Python堆栈跟踪 =====", Console::EColor_red);
+							Py_ssize_t size = PyList_Size(traceback_list);
+							for (Py_ssize_t i = 0; i < size; i++) {
+								PyObject* line = PyList_GetItem(traceback_list, i);
+								const char* line_str = PyUnicode_AsUTF8(line);
+								if (line_str) {
+									g_Console->cLog("%s", Console::EColor_red, line_str);
+								}
+							}
+							Py_DECREF(traceback_list);
+						}
+						
+						Py_XDECREF(format_func);
+					}
+					
+					Py_DECREF(traceback_module);
+				}
+			}
+		}
+		
+		// 清理错误对象
+		Py_XDECREF(type);
+		Py_XDECREF(value);
+		Py_XDECREF(traceback);
+		
+		fpPyGILState_Release(gstate);
+	}
+
+	// 安全属性设置函数
+	int Bridge::py_object_set_attr(lua_State* L) {
+		g_Console->cLog("GMP.setattr: 开始安全属性设置...", Console::EColor_green);
+		
+		// 检查参数数量
+		if (lua_gettop(L) != 3) {
+			return luaL_error(L, "setattr需要3个参数: (对象, 属性名, 值)");
+		}
+		
+		// 1. 检查并获取目标对象
+		if (!luaL_testudata(L, 1, "PyObject")) {
+			return luaL_error(L, "参数 #1 必须是PyObject");
+		}
+		
+		PyObjectWrapper* wrapper = (PyObjectWrapper*)lua_touserdata(L, 1);
+		if (!wrapper || !wrapper->obj) {
+			return luaL_error(L, "参数 #1 是无效的PyObject");
+		}
+		
+		// 打印对象信息
+		g_Console->cLog("目标对象: %p", Console::EColor_green, wrapper->obj);
+		
+		// 2. 检查并获取属性名
+		if (!lua_isstring(L, 2)) {
+			return luaL_error(L, "参数 #2 必须是字符串属性名");
+		}
+		
+		const char* attrName = lua_tostring(L, 2);
+		g_Console->cLog("属性名: '%s'", Console::EColor_green, attrName);
+		
+		// 3. 获取GIL
+		PyGILState_STATE gstate = fpPyGILState_Ensure();
+		
+		// 4. 创建Python属性名
+		PyObject* pyAttrName = fpPy_BuildValue("s", attrName);
+		if (!pyAttrName) {
+			fpPyGILState_Release(gstate);
+			return luaL_error(L, "创建Python属性名失败");
+		}
+		
+		// 5. 获取目标对象的类型信息
+		PyObject* objType = PyObject_Type(wrapper->obj);
+		if (objType) {
+			PyObject* typeName = PyObject_GetAttrString(objType, "__name__");
+			if (typeName) {
+				const char* typeStr = PyUnicode_AsUTF8(typeName);
+				g_Console->cLog("目标对象类型: %s", Console::EColor_green, typeStr ? typeStr : "未知");
+				Py_DECREF(typeName);
+			}
+			Py_DECREF(objType);
+		}
+		
+		// 检查对象是否可以设置属性
+		bool hasSetattr = PyObject_HasAttrString(wrapper->obj, "__setattr__");
+		bool hasDict = PyObject_HasAttrString(wrapper->obj, "__dict__");
+		g_Console->cLog("对象特性: __setattr__=%d, __dict__=%d", Console::EColor_green, hasSetattr, hasDict);
+		
+		// 6. 处理值 - 根据类型进行转换
+		PyObject* pyValue = nullptr;
+		int valueType = lua_type(L, 3);
+		g_Console->cLog("值类型: %s", Console::EColor_green, lua_typename(L, valueType));
+		
+		// 如果是PyObject类型，直接使用
+		if (valueType == LUA_TUSERDATA && luaL_testudata(L, 3, "PyObject")) {
+			PyObjectWrapper* valueWrapper = (PyObjectWrapper*)lua_touserdata(L, 3);
+			if (valueWrapper && valueWrapper->obj) {
+				pyValue = valueWrapper->obj;
+				Py_INCREF(pyValue);  // 增加引用计数
+				g_Console->cLog("值是PyObject: %p", Console::EColor_green, pyValue);
+				
+				// 打印值的类型
+				PyObject* valType = PyObject_Type(pyValue);
+				if (valType) {
+					PyObject* valTypeName = PyObject_GetAttrString(valType, "__name__");
+					if (valTypeName) {
+						const char* valTypeStr = PyUnicode_AsUTF8(valTypeName);
+						g_Console->cLog("值的类型: %s", Console::EColor_green, valTypeStr ? valTypeStr : "未知");
+						Py_DECREF(valTypeName);
+					}
+					Py_DECREF(valType);
+				}
+				
+				// 尝试打印值的内容
+				PyObject* strRep = fpPyObject_Str(pyValue);
+				if (strRep) {
+					const char* strValue = PyUnicode_AsUTF8(strRep);
+					g_Console->cLog("值内容: %s", Console::EColor_green, strValue ? strValue : "无法显示");
+					Py_DECREF(strRep);
+				}
+			}
+		}
+		
+		// 如果不是PyObject或获取失败，使用通用转换
+		if (!pyValue) {
+			switch (valueType) {
+				case LUA_TNIL:
+					Py_INCREF(Py_None);
+					pyValue = Py_None;
+					g_Console->cLog("值转换为None", Console::EColor_green);
+					break;
+					
+				case LUA_TBOOLEAN:
+					if (lua_toboolean(L, 3)) {
+						Py_INCREF(Py_True);
+						pyValue = Py_True;
+					} else {
+						Py_INCREF(Py_False);
+						pyValue = Py_False;
+					}
+					g_Console->cLog("值转换为布尔值: %s", Console::EColor_green, lua_toboolean(L, 3) ? "True" : "False");
+					break;
+					
+				case LUA_TNUMBER:
+					{
+						lua_Number num = lua_tonumber(L, 3);
+						pyValue = fpPy_BuildValue("d", num);
+						g_Console->cLog("值转换为数字: %f", Console::EColor_green, num);
+					}
+					break;
+					
+				case LUA_TSTRING:
+					{
+						size_t len;
+						const char* str = lua_tolstring(L, 3, &len);
+						pyValue = fpPy_BuildValue("s#", str, len);
+						g_Console->cLog("值转换为字符串: \"%s\"", Console::EColor_green, str);
+					}
+					break;
+					
+				default:
+					pyValue = LuaToPython(L, 3);
+					g_Console->cLog("使用通用转换方法", Console::EColor_green);
+					break;
+			}
+		}
+		
+		// 检查值转换结果
+		if (!pyValue) {
+			Py_DECREF(pyAttrName);
+			fpPyGILState_Release(gstate);
+			return luaL_error(L, "无法将值转换为Python对象");
+		}
+		
+		// 7. 执行属性设置
+		g_Console->cLog("执行属性设置操作...", Console::EColor_green);
+		int result = fpPyObject_SetAttr(wrapper->obj, pyAttrName, pyValue);
+		
+		// 8. 清理资源
+		Py_DECREF(pyAttrName);
+		Py_DECREF(pyValue);
+		
+		// 9. 处理结果
+		if (result < 0) {
+			g_Console->cLog("属性设置失败!", Console::EColor_red);
+			
+			// 尝试获取更详细的错误信息
+			if (PyErr_Occurred()) {
+				PyObject* ptype, *pvalue, *ptraceback;
+				PyErr_Fetch(&ptype, &pvalue, &ptraceback);
+				
+				if (pvalue) {
+					PyObject* str_exc = fpPyObject_Str(pvalue);
+					if (str_exc) {
+						const char* exc_str = PyUnicode_AsUTF8(str_exc);
+						g_Console->cLog("Python错误: %s", Console::EColor_red, exc_str ? exc_str : "未知错误");
+						Py_DECREF(str_exc);
+					}
+				}
+				
+				// 检查是否是AttributeError
+				if (ptype) {
+					PyObject* err_name = PyObject_GetAttrString(ptype, "__name__");
+					if (err_name) {
+						const char* err_str = PyUnicode_AsUTF8(err_name);
+						g_Console->cLog("错误类型: %s", Console::EColor_red, err_str ? err_str : "Unknown");
+						
+						// 给出特定错误类型的帮助信息
+						if (err_str && strcmp(err_str, "AttributeError") == 0) {
+							g_Console->cLog("原因: 对象不允许设置该属性或属性不存在", Console::EColor_yellow);
+						}
+						Py_DECREF(err_name);
+					}
+				}
+				
+				// 清理错误对象
+				Py_XDECREF(ptype);
+				Py_XDECREF(pvalue);
+				Py_XDECREF(ptraceback);
+				PyErr_Clear();
+			}
+			
+			fpPyGILState_Release(gstate);
+			return luaL_error(L, "设置属性 '%s' 失败", attrName);
+		}
+		
+		// 成功设置属性
+		g_Console->cLog("属性设置成功", Console::EColor_green);
+		fpPyGILState_Release(gstate);
+		
+		return 0;  // 返回0表示没有返回值
 	}
 }

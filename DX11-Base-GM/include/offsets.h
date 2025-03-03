@@ -29,7 +29,8 @@ namespace DX11Base {
 
 		UINT64 offset_PyDict_SetItem = 0xc00f0;
 
-		
+		UINT64 offset_PObject_SetItem = 0X65da0;
+		UINT64 offset_PyTuple_SetItem = 0xbc5a0;
 	}
 
 }

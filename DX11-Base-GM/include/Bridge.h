@@ -19,8 +19,8 @@ namespace DX11Base {
 	typedef PyObject* (__stdcall* Tnew_dict)(PyDictKeysObject* , PyObject** );
 	typedef int(__stdcall* TPyObject_SetAttr)(PyObject* , PyObject* , PyObject* );
 	typedef int(__stdcall* TPyDict_SetItem)(PyObject*, PyObject*, PyObject*);
-
-
+	typedef int(__stdcall* TPyObject_SetItem)(PyObject*, PyObject*, PyObject*);
+	typedef int(__stdcall* TPyTuple_SetItem)(PyObject* op, Py_ssize_t i, PyObject* newitem);
 
 	typedef struct {
 		PyObject* obj;
@@ -45,6 +45,8 @@ namespace DX11Base {
 		static TPyDict_SetItem fpPyDict_SetItem;
 		static Tnew_dict fpnew_dict;
 		static Tnew_keys_object fpnew_keys_object;
+		static TPyObject_SetItem fpPyObject_SetItem;
+		static TPyTuple_SetItem fpPyTuple_SetItem;
 
 	public:
 		bool isInitialized();
@@ -91,6 +93,12 @@ namespace DX11Base {
 
 		// 在Bridge类中添加
 		static int createPyDict(lua_State* L);
+
+		// 新增：增强的异常处理来辅助调试
+		static void PrintPythonError(const char* context);
+
+		// Python 属性设置的安全替代方案
+		static int py_object_set_attr(lua_State* L);
 
 	private:
 		
