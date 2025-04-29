@@ -1,1 +1,10 @@
-﻿  DllInjector.vcxproj -> G:\Cheat\Gunfire\InjectorWithLua\cpython-3.6.12\PCbuild\x64\Release\DllInjector.exe
+﻿  DllInjector.cpp
+G:\Cheat\Gunfire\InjectorWithLua\cpython-3.6.12\DllInjector\DllInjector.cpp(129,10): warning C4101: “exportBuffer”: 未引用的局部变量
+G:\Cheat\Gunfire\InjectorWithLua\cpython-3.6.12\DllInjector\DllInjector.cpp(502,71): warning C4312: “类型强制转换”: 从“DWORD”转换到更大的“HMODULE”
+G:\Cheat\Gunfire\InjectorWithLua\cpython-3.6.12\DllInjector\DllInjector.cpp(509,79): warning C4312: “类型强制转换”: 从“BOOL”转换到更大的“LPVOID”
+  正在生成代码
+  2 of 58 functions ( 3.4%) were compiled, the rest were copied from previous compilation.
+    0 functions were new in current compilation
+    1 functions had inline decision re-evaluated but remain unchanged
+  已完成代码的生成
+  DllInjector.vcxproj -> G:\Cheat\Gunfire\InjectorWithLua\cpython-3.6.12\PCbuild\x64\Release\DllInjector.exe

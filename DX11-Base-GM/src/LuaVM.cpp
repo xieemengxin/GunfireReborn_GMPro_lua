@@ -3,44 +3,16 @@
 #include "Engine.h"
 #include "Menu.h"
 #include "Bridge.h"
+#include <queue>
+#include <algorithm>
 
 namespace DX11Base
 {
-	ThreadPool::ThreadPool(size_t threads) : stop(false)
+	LuaVM::LuaVM() : L(nullptr), isInitialized(false), 
+					 scriptQueue(nullptr), queueMutex(nullptr), 
+					 queueCondition(nullptr), threadRunning(nullptr)
 	{
-		for (size_t i = 0; i < threads; ++i)
-			workers.emplace_back([this] {
-			while (true) {
-				std::function<void()> task;
-				{
-					std::unique_lock<std::mutex> lock(queue_mutex);
-					condition.wait(lock, [this] {
-						return stop || !tasks.empty();
-						});
-					if (stop && tasks.empty())
-						return;
-					task = std::move(tasks.front());
-					tasks.pop();
-				}
-				task();
-			}
-				});
-	}
-
-	ThreadPool::~ThreadPool()
-	{
-		{
-			std::unique_lock<std::mutex> lock(queue_mutex);
-			stop = true;
-		}
-		condition.notify_all();
-		for (auto& worker : workers)
-			worker.join();
-	}
-
-	LuaVM::LuaVM() : L(nullptr), isInitialized(false)
-	{
-		threadPool = std::make_unique<ThreadPool>(4);
+		// 移除线程池初始化
 	}
 
 	LuaVM::~LuaVM()
@@ -66,20 +38,72 @@ namespace DX11Base
 	// 自定义的 print 函数
 	static int CustomPrint(lua_State* L) {
 		int nargs = lua_gettop(L);
-		std::string output;
-		
-		for (int i = 1; i <= nargs; i++) {
-			if (i > 1) output += "\t";
-			if (lua_isstring(L, i)) {
-				output += lua_tostring(L, i);
+
+		try {
+			// 收集所有参数
+			std::vector<std::string> args;
+			size_t totalLength = 0;
+
+			for (int i = 1; i <= nargs; i++) {
+				if (lua_isstring(L, i)) {
+					size_t len;
+					const char* str = lua_tolstring(L, i, &len);
+					args.push_back(std::string(str, len));
+					totalLength += len;
+				}
+				else {
+					// 非字符串类型，转换为类型描述
+					const char* typeName = lua_typename(L, lua_type(L, i));
+					std::string typeStr = "<" + std::string(typeName) + ">";
+					args.push_back(typeStr);
+					totalLength += typeStr.length();
+				}
+
+				// 参数间添加分隔符
+				if (i < nargs) {
+					totalLength += 1; // 为\t预留空间
+				}
 			}
+
+			// 构建完整字符串
+			std::string fullText;
+			fullText.reserve(totalLength);
+
+			for (size_t i = 0; i < args.size(); i++) {
+				fullText += args[i];
+				if (i < args.size() - 1) {
+					fullText += '\t';
+				}
+			}
+
+			// 分片打印，但不显示分片指示
+			const size_t CHUNK_SIZE = 4000; // 每次打印的最大字符数
+			size_t position = 0;
+
+			// 不再显示总长度提示
+			
+			// 连续打印，不显示分片指示
+			while (position < fullText.length()) {
+				// 计算当前片段长度
+				size_t chunkLength = (CHUNK_SIZE < fullText.length() - position) ?
+					CHUNK_SIZE : (fullText.length() - position);
+				std::string chunk = fullText.substr(position, chunkLength);
+
+				// 直接打印内容，不添加任何指示
+				g_Console->cLog(chunk.c_str(), Console::EColors::EColor_white);
+
+				position += chunkLength;
+			}
+			
+			// 不再显示完成指示
 		}
-		// 移除末尾的换行符，因为 cLog 会自动添加时间戳
-		// output += "\n";  // 删除这行
-		
-		// 使用白色文本颜色，并确保添加到日志缓冲区
-		g_Console->cLog(output.c_str(), Console::EColors::EColor_white);
-		
+		catch (const std::exception& e) {
+			g_Console->cLog("print 发生异常 %s", Console::EColors::EColor_red, e.what());
+		}
+		catch (...) {
+			g_Console->cLog("print 未知错误", Console::EColors::EColor_red);
+		}
+
 		return 0;
 	}
 
@@ -95,6 +119,12 @@ namespace DX11Base
 
 		luaL_openlibs(L);
 		
+		
+		// 设置Lua全局变量中的内存限制参数
+		lua_pushinteger(L, 1024 * 1024 * 1024);  // 1GB内存上限
+		lua_setglobal(L, "MEMORY_LIMIT");
+		lua_gc(L, LUA_GCSETPAUSE, 100);    // 当内存使用增长100%时暂停
+		
 		// 添加脚本搜索路径（放在 RegisterAPI 之前）
 		std::string scriptsPath = CodeEditor::GetScriptsPath();
 		
@@ -103,34 +133,23 @@ namespace DX11Base
 		GetModuleFileNameA(NULL, buffer, MAX_PATH);
 		std::string rootPath = buffer;
 		rootPath = rootPath.substr(0, rootPath.find_last_of("\\/"));
-		
+		g_Console->cLog(" rootPath :%s", Console::EColor_green, rootPath.c_str());
 		// 添加多个搜索路径
 		AddSearchPath((rootPath + "\\Scripts\\?.lua").c_str());  // Scripts 目录中的 .lua 文件
 		AddSearchPath((rootPath + "\\Scripts\\?\\init.lua").c_str());  // Scripts 目录中的模块
 		AddSearchPath((rootPath + "\\Scripts\\libs\\?.lua").c_str());  // 库文件
 		AddSearchPath((rootPath + "\\Scripts\\modules\\?.lua").c_str());  // 模块文件
-		
+
+
 		// 注册 API 函数
 		RegisterAPI();
 
-		// 创建线程池的线程状态
-		for (size_t i = 0; i < 4; i++) {  // 创建4个线程状态
-			lua_State* threadState = CreateNewState();
-			if (threadState) {
-				// 为线程状态也添加搜索路径
-				AddSearchPathToState(threadState, (rootPath + "\\Scripts\\?.lua").c_str());
-				AddSearchPathToState(threadState, (rootPath + "\\Scripts\\?\\init.lua").c_str());
-				AddSearchPathToState(threadState, (rootPath + "\\Scripts\\libs\\?.lua").c_str());
-				AddSearchPathToState(threadState, (rootPath + "\\Scripts\\modules\\?.lua").c_str());
-				
-				std::lock_guard<std::mutex> lock(luaMutex);
-				threadStates.push_back(threadState);
-			}
-		}
+		// 移除线程池创建代码
 
 		isInitialized = true;
 		return true;
 	}
+
 
 	// 新增方法：向指定状态添加搜索路径
 	void LuaVM::AddSearchPathToState(lua_State* state, const char* path)
@@ -148,23 +167,18 @@ namespace DX11Base
 		lua_pop(state, 1);
 	}
 
-	// 修改现有方法
+	// 修改添加搜索路径方法，移除多线程相关代码
 	void LuaVM::AddSearchPath(const char* path)
 	{
-		if (!isInitialized || !path) return;
+		if (isInitialized || !path) return;
 
 		// 添加到主状态
 		AddSearchPathToState(L, path);
 		
-		// 添加到所有线程状态
-		for (auto state : threadStates) {
-			if (state) {
-				AddSearchPathToState(state, path);
-			}
-		}
+		// 移除线程状态相关代码
 		
 		// 输出日志以便调试
-		g_Console->cLog("添加 Lua 搜索路径: %s", Console::EColor_green, path);
+		g_Console->cLog("Lua Search %s", Console::EColor_green, path);
 	}
 
 	void LuaVM::RegisterAPI(lua_State* state)
@@ -227,55 +241,30 @@ namespace DX11Base
 		return true;
 	}
 
+	// 修改ExecuteString方法，移除多线程相关代码
 	bool LuaVM::ExecuteString(const char* script)
 	{
 		if (!isInitialized || !script) return false;
-
-		std::lock_guard<std::mutex> lock(luaMutex);
 		
-		// 将执行任务添加到线程池
-		threadPool->enqueue([this, script = std::string(script)]() {
-			// 获取一个可用的线程状态
-			lua_State* threadState = nullptr;
-			{
-				std::lock_guard<std::mutex> lock(luaMutex);
-				for (auto state : threadStates) {
-					if (state) {
-						threadState = state;
-						break;
-					}
-				}
-			}
-
-			if (!threadState) {
-				LogLuaError("Error:", "No available thread state");
-				return;
-			}
-
-			// 压入错误处理函数
-			lua_pushcfunction(threadState, LuaErrorHandler);
-			int errHandlerIndex = lua_gettop(threadState);
-
-			// 使用单独的互斥锁保护脚本执行
-			std::lock_guard<std::mutex> execLock(luaMutex);
-			
-			if (luaL_loadstring(threadState, script.c_str())) {
-				const char* error = lua_tostring(threadState, -1);
-				LogLuaError("Syntax error:", error);
-				lua_pop(threadState, 2);
-				return;
-			}
-
-			if (lua_pcall(threadState, 0, 0, errHandlerIndex)) {
-				const char* error = lua_tostring(threadState, -1);
-				LogLuaError("Runtime error:", error, true);
-				lua_pop(threadState, 2);
-				return;
-			}
-
-			lua_pop(threadState, 1);  // 弹出错误处理函数
-		});
+		// 直接在主线程执行脚本
+		lua_pushcfunction(L, LuaErrorHandler);
+		int errHandlerIndex = lua_gettop(L);
 		
+		if (luaL_loadstring(L, script)) {
+			const char* error = lua_tostring(L, -1);
+			LogLuaError("Syntax error:", error);
+			lua_pop(L, 2);
+			return false;
+		}
+
+		if (lua_pcall(L, 0, 0, errHandlerIndex)) {
+			const char* error = lua_tostring(L, -1);
+			LogLuaError("Runtime error:", error, true);
+			lua_pop(L, 2);
+			return false;
+		}
+
+		lua_pop(L, 1);  // 弹出错误处理函数
 		return true;
 	}
 
@@ -311,7 +300,21 @@ namespace DX11Base
 	}
 
 	std::string LuaVM::FindModule(const std::string& moduleName) {
+		// 获取当前工作目录
+		char currentDir[MAX_PATH];
+		GetCurrentDirectoryA(MAX_PATH, currentDir);
+		
+		// 获取可执行文件目录
+		char exeDir[MAX_PATH];
+		GetModuleFileNameA(NULL, exeDir, MAX_PATH);
+		std::string exePath = exeDir;
+		exePath = exePath.substr(0, exePath.find_last_of("\\/"));
+		
+		// 设置搜索路径，优先搜索当前目录
 		std::vector<std::string> searchPaths = {
+			"./",  // 当前目录
+			currentDir + std::string("\\"),  // 使用绝对路径
+			exePath + "\\",  // 可执行文件目录
 			CodeEditor::GetScriptsPath(),
 			CodeEditor::GetScriptsPath() + "libs/",
 			CodeEditor::GetScriptsPath() + "modules/"
@@ -320,6 +323,9 @@ namespace DX11Base
 		// 替换模块名中的点为路径分隔符
 		std::string modulePath = moduleName;
 		std::replace(modulePath.begin(), modulePath.end(), '.', '\\');
+
+		// 记录尝试过的路径，用于调试
+		std::vector<std::string> triedPaths;
 
 		for (const auto& basePath : searchPaths) {
 			// 尝试不同的文件扩展名
@@ -330,10 +336,20 @@ namespace DX11Base
 			};
 
 			for (const auto& path : attempts) {
+				triedPaths.push_back(path);
+				g_Console->cLog("Searching module at: %s", Console::EColor_yellow, path.c_str());
 				if (GetFileAttributesA(path.c_str()) != INVALID_FILE_ATTRIBUTES) {
+					g_Console->cLog("Module found: %s", Console::EColor_green, path.c_str());
 					return path;
 				}
 			}
+		}
+
+		// 如果没找到，打印所有尝试过的路径
+		g_Console->cLog("Module not found: %s", Console::EColor_red, moduleName.c_str());
+		g_Console->cLog("Tried following paths:", Console::EColor_red);
+		for (const auto& path : triedPaths) {
+			g_Console->cLog("  %s", Console::EColor_red, path.c_str());
 		}
 
 		return "";
@@ -351,237 +367,30 @@ namespace DX11Base
 		return modules;
 	}
 
-	lua_State* LuaVM::CreateNewState()
-	{
-		lua_State* newState = luaL_newstate();
-		if (!newState) return nullptr;
-
-		luaL_openlibs(newState);  // 注册标准库
-		RegisterAPI(newState);     // 注册我们的自定义 API
-
-		// 复制主状态的 GMP 表到新状态
-		if (L) {
-			// 在新状态创建 GMP 表
-			lua_newtable(newState);
-			lua_setglobal(newState, defaultNameSpace.c_str());
-
-			// 获取主状态的 GMP 表
-			lua_getglobal(L, defaultNameSpace.c_str());
-			if (!lua_isnil(L, -1)) {
-				// 获取新状态的 GMP 表
-				lua_getglobal(newState, defaultNameSpace.c_str());
-
-				// 遍历主状态的 GMP 表并复制到新状态
-				lua_pushnil(L);  // 第一个键
-				while (lua_next(L, -2) != 0) {
-					// 复制键
-					lua_pushvalue(L, -2);
-					const char* key = lua_tostring(L, -1);
-					
-					// 检查值的类型
-					if (lua_iscfunction(L, -2)) {
-						// 如果是 C 函数，获取函数指针并在新状态注册
-						lua_CFunction func = lua_tocfunction(L, -2);
-						lua_pushcfunction(newState, func);
-					} else {
-						// 其他类型的值，尝试直接复制
-						lua_pushvalue(L, -2);
-						lua_xmove(L, newState, 1);
-					}
-					
-					// 在新状态设置键值对
-					lua_setfield(newState, -2, key);
-					
-					lua_pop(L, 2);  // 弹出键的副本和值
-				}
-				
-				lua_pop(newState, 1);  // 弹出新状态的 GMP 表
-			}
-			lua_pop(L, 1);  // 弹出主状态的 GMP 表
-		}
-
-		return newState;
-	}
-
-	void LuaVM::DestroyState(lua_State* state)
-	{
-		if (state) {
-			lua_close(state);
-		}
-	}
-
 	void LuaVM::Shutdown()
-
 	{
-
-		// 设置关闭标志
-
-		shuttingDown = true;
-
-		// 等待并关闭线程池
-		if (threadPool) {
-			threadPool.reset();
+		// 停止Lua线程
+		if (threadRunning) {
+			threadRunning->store(false);
+			if (queueCondition) queueCondition->notify_all();
+			std::this_thread::sleep_for(std::chrono::milliseconds(100)); // 等待线程退出
 		}
 
-		// 清理所有线程状态
-
-		{
-
-			std::lock_guard<std::mutex> lock(luaMutex);
-
-			for (auto state : threadStates) {
-
-				if (state) {
-
-					lua_close(state);
-
-				}
-
-			}
-
-			threadStates.clear();
-
-		}
-
-
-
-		// 关闭主 Lua 状态
-
+		// 关闭Lua状态
 		if (L) {
-
 			lua_close(L);
-
 			L = nullptr;
-
 		}
-
-
 
 		// 清理其他资源
-
 		isInitialized = false;
-
 		loadingModules.clear();
-
 		loadedModules.clear();
-
-	}
-
-	// 添加一个 RAII 包装器来管理 lua_State
-	class LuaStateGuard {
-	private:
-		lua_State* state;
-		LuaVM* vm;
-
-	public:
-		LuaStateGuard(LuaVM* vm) : vm(vm) {
-			state = vm->CreateNewState();
-		}
-
-		~LuaStateGuard() {
-			if (state) {
-				vm->DestroyState(state);
-			}
-		}
-
-		lua_State* get() { return state; }
-
-		// 禁止拷贝
-		LuaStateGuard(const LuaStateGuard&) = delete;
-		LuaStateGuard& operator=(const LuaStateGuard&) = delete;
-	};
-
-	std::future<bool> LuaVM::ExecuteStringAsync(const char* script)
-	{
-		return threadPool->enqueue([this, script = std::string(script)]() {
-			LuaStateGuard stateGuard(this);
-			lua_State* threadState = stateGuard.get();
-			bool result = false;
-
-			try {
-				if (threadState) {
-					lua_pushcfunction(threadState, LuaErrorHandler);
-					int errHandlerIndex = lua_gettop(threadState);
-
-					if (luaL_loadstring(threadState, script.c_str())) {
-						const char* error = lua_tostring(threadState, -1);
-						LogLuaError("Async Syntax Error:", error);
-						lua_pop(threadState, 2);
-						return false;
-					}
-
-					if (lua_pcall(threadState, 0, 0, errHandlerIndex)) {
-						const char* stackTrace = lua_tostring(threadState, -1);
-						LogLuaError("Async Runtime Error:", stackTrace, true);
-						lua_pop(threadState, 2);
-						return false;
-					}
-
-					lua_pop(threadState, 1);
-					result = true;
-				}
-			}
-			catch (const std::exception& e) {
-				LogLuaError("C++ Exception:", e.what());
-				result = false;
-			}
-			catch (...) {
-				LogLuaError("Unknown Error:", "An unexpected error occurred");
-				result = false;
-			}
-
-			return result;
-			});
-	}
-
-	std::future<bool> LuaVM::ExecuteFileAsync(const char* filename)
-	{
-		return threadPool->enqueue([this, filename = std::string(filename)]() {
-			LuaStateGuard stateGuard(this);
-			lua_State* threadState = stateGuard.get();
-			bool result = false;
-
-			try {
-				if (threadState) {
-					lua_pushcfunction(threadState, LuaErrorHandler);
-					int errHandlerIndex = lua_gettop(threadState);
-
-					if (luaL_loadfile(threadState, filename.c_str())) {
-						const char* error = lua_tostring(threadState, -1);
-						LogLuaError("Async file load error:", error);
-						lua_pop(threadState, 2);
-						return false;
-					}
-
-					if (lua_pcall(threadState, 0, 0, errHandlerIndex)) {
-						const char* stackTrace = lua_tostring(threadState, -1);
-						LogLuaError("Async runtime error in file:", stackTrace, true);
-						lua_pop(threadState, 2);
-						return false;
-					}
-
-					lua_pop(threadState, 1);
-					result = true;
-				}
-			}
-			catch (const std::exception& e) {
-				LogLuaError("C++ exception in async file execution:", e.what());
-				result = false;
-			}
-			catch (...) {
-				LogLuaError("Unknown error in async file execution:", "");
-				result = false;
-			}
-
-			return result;
-			});
 	}
 
 	// API 函数实现
 	namespace LuaAPI
 	{
-		
-
 		int GetWindowSize(lua_State* L)
 		{
 			lua_pushnumber(L, g_Engine->mGameWidth);
@@ -725,18 +534,66 @@ namespace DX11Base
 
 	void LuaVM::RegisterFunction(const char* name, lua_CFunction func, const char* namespace_) {
 		if (!isInitialized || !L) return;
-
-		std::lock_guard<std::mutex> lock(luaMutex);
 		
-		// 在主状态中注册
+		// 仅在主状态中注册
 		RegisterFunctionToState(L, name, func, namespace_);
-
-		// 在所有线程状态中注册
-		for (auto state : threadStates) {
-			if (state) {
-				RegisterFunctionToState(state, name, func, namespace_);
-			}
-		}
 	}
 
+	// 修改RegisterQueueAccessFunctions方法
+	void LuaVM::RegisterQueueAccessFunctions(std::queue<std::string>* queue,
+		std::mutex* mutex,
+		std::condition_variable* condition,
+		std::atomic<bool>* running)
+	{
+		scriptQueue = queue;
+		queueMutex = mutex;
+		queueCondition = condition;
+		threadRunning = running;
+	}
+
+	bool LuaVM::QueueScriptForExecution(const char* script)
+	{
+		if (!script || !scriptQueue || !queueMutex || !queueCondition) return false;
+
+		int queueSize = 0;
+		{
+			std::lock_guard<std::mutex> lock(*queueMutex);
+
+			// 检查队列大小，避免堆积太多任务
+			queueSize = scriptQueue->size();
+			if (queueSize >= 5) { // 最多允许5个脚本在队列中
+				g_Console->cLog("[-] 脚本队列已满 (%d 个脚本等待执行)，请稍后再试",
+					Console::EColors::EColor_red, queueSize);
+				return false;
+			}
+
+			scriptQueue->push(std::string(script));
+			queueSize = scriptQueue->size();
+		}
+
+		g_Console->cLog("[+] 脚本已加入执行队列 (队列中还有 %d 个脚本)",
+			Console::EColors::EColor_green, queueSize);
+
+		queueCondition->notify_one();
+		return true;
+	}
+
+	// 添加StartScriptProcessor方法实现
+	void LuaVM::StartScriptProcessor()
+	{
+		if (!threadRunning) return;
+		threadRunning->store(true);
+		g_Console->cLog("[+] 脚本处理器已启动", Console::EColors::EColor_green);
+	}
+
+	// 添加StopScriptProcessor方法实现
+	void LuaVM::StopScriptProcessor()
+	{
+		if (!threadRunning) return;
+		threadRunning->store(false);
+		if (queueCondition) {
+			queueCondition->notify_all(); // 唤醒所有等待的线程
+		}
+		g_Console->cLog("[+] 脚本处理器已停止", Console::EColors::EColor_green);
+	}
 }

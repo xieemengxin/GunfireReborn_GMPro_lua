@@ -2,6 +2,7 @@
 #include <Engine.h>
 #include <Menu.h>
 #include <luaVM.h>
+#include <mutex>  // 添加头文件
 
 namespace DX11Base
 {
@@ -150,16 +151,10 @@ namespace DX11Base
 
 			if (ImGui::Button("UNHOOK DLL", ImVec2(ImGui::GetContentRegionAvail().x, 20))) 
 			{
-				g_Console->cLog("\n\n[+] UNHOOK INITIALIZED\n\n", Console::EColors::EColor_red);
-				
-				// 先关闭 LuaVM
-				if (g_LuaVM) {
-					g_LuaVM->Shutdown();
-					g_LuaVM.reset();
-				}
+				Menu::UninstallHook();
 
 				// 等待一小段时间确保所有线程都已关闭
-				Sleep(100);
+				Sleep(3000);
 
 				// 设置卸载标志
 				g_KillSwitch = TRUE;
@@ -179,6 +174,9 @@ namespace DX11Base
 		static char newFileName[256] = "";           // 新文件名输入缓冲
 		static bool showNewFileModal = false;        // 是否显示新建文件对话框
 		
+		// 添加一个标志来指示脚本是否正在执行
+		static bool isScriptRunning = false;
+
 		// 获取脚本目录的完整路径
 		std::string GetScriptsPath()
 		{
@@ -191,7 +189,18 @@ namespace DX11Base
 
 		//执行当前编辑器中的内容
 		static void RunScript() {
+			// 使用互斥锁确保只有一个线程在执行脚本
+			std::lock_guard<std::mutex> lock(scriptMutex);
 			
+			// 检查脚本是否已经在运行
+			if (isScriptRunning) {
+				g_Console->cLog("[-] 脚本正在运行中，请稍后再试\n", Console::EColors::EColor_red);
+				return;
+			}
+
+			// 设置脚本运行标志
+			isScriptRunning = true;
+
 			if (g_LuaVM && g_LuaVM->IsInitialized())
 			{
 				bool success =  g_LuaVM->ExecuteString(EditorBuffer);
@@ -205,6 +214,8 @@ namespace DX11Base
 				}
 			}
 
+			// 重置脚本运行标志
+			isScriptRunning = false;
 		}
 		
 
@@ -495,11 +506,7 @@ namespace DX11Base
 
 			//执行脚本
 			ImGui::SameLine();
-			if (ImGui::Button("Run"))
-			{
-				// 添加运行按钮优化用户体验
-				RunScript();
-			}
+			DrawRunButton();
 
 			// 渲染新建文件对话框
 			RenderNewFileModal();
@@ -559,6 +566,23 @@ namespace DX11Base
 				
 			ImGui::PopID();
 			ImGui::PopStyleColor(2); // 恢复颜色样式
+		}
+
+		// 在UI中控制按钮的可点击性
+		void DrawRunButton() {
+			// 如果脚本正在运行，禁用按钮
+			if (isScriptRunning) {
+				ImGui::BeginDisabled();
+			}
+
+			if (ImGui::Button("RUN", ImVec2(ImGui::GetContentRegionAvail().x, 20))) {
+				RunScript();
+			}
+
+			// 如果按钮被禁用，重新启用
+			if (isScriptRunning) {
+				ImGui::EndDisabled();
+			}
 		}
 	}
 
@@ -928,5 +952,25 @@ namespace DX11Base
 		CodeEditor::Initialize();
 	}
 
+	void Menu::UninstallHook() {
+		g_Console->cLog("[+] 开始卸载DLL", Console::EColors::EColor_red);
+
+		// 先关闭 LuaVM
+		if (g_LuaVM) {
+			g_LuaVM->Shutdown();
+			g_LuaVM.reset();
+			g_Console->cLog("[+] LuaVM 已关闭", Console::EColors::EColor_red);
+		}
+
+		// 确保所有后台线程都已终止
+		g_Running = false;
+		std::this_thread::sleep_for(std::chrono::milliseconds(100)); // 等待线程终止
+
+		
+		// 其他卸载操作
+		// ...
+
+		g_Console->cLog("[+] DLL 卸载完成", Console::EColors::EColor_red);
+	}
 
 }

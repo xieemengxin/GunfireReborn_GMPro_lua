@@ -8,7 +8,10 @@ namespace DX11Base
 	}
 
 	namespace CodeEditor {
+		// 添加一个互斥锁
+		static std::mutex scriptMutex;
 		std::string GetScriptsPath();
+		static void DrawRunButton();
 	}
 
 	class Menu
@@ -30,6 +33,8 @@ namespace DX11Base
 		static void DrawLogWindow();
 
 		static void Initialize();
+
+		static void UninstallHook();
 
 		//	constructor
 		Menu()  noexcept = default;

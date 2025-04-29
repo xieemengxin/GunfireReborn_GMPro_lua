@@ -102,6 +102,9 @@
     <ClInclude Include="include\Bridge.h">
       <Filter>头文件\Class</Filter>
     </ClInclude>
+    <ClInclude Include="Source.h">
+      <Filter>头文件\Class</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp">

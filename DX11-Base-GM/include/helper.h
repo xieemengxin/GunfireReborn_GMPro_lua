@@ -12,6 +12,9 @@ namespace DX11Base
 	inline std::atomic_bool g_Running{};
 	inline std::atomic_bool g_KillSwitch = FALSE;
 
+	// 添加是否需要HookD3D来显示UI
+	inline std::atomic_bool g_HookD3DSwitch = TRUE;
+
 	struct Vector2 
 	{
 		float x, y;
@@ -41,4 +44,7 @@ namespace DX11Base
 	{
 		double x, y, z, w;
 	};
+
+
+	
 }

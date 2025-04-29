@@ -23,6 +23,7 @@ namespace DX11Base {
 	typedef int(__stdcall* TPyTuple_SetItem)(PyObject* op, Py_ssize_t i, PyObject* newitem);
 
 	typedef struct {
+		PyObject* parent;
 		PyObject* obj;
 	} PyObjectWrapper;
 
@@ -77,9 +78,6 @@ namespace DX11Base {
 		static int ImportModule(lua_State* L);
 		static int ToString(lua_State* L);
 
-		static int ToLua(lua_State* L);
-
-		static int ToPython(lua_State* L);
 
 		static int py_object_getitem(lua_State* L);
 
@@ -99,6 +97,16 @@ namespace DX11Base {
 
 		// Python 属性设置的安全替代方案
 		static int py_object_set_attr(lua_State* L);
+
+		static int py_dict_iterate(lua_State* L);
+
+		static int py_list_iterate(lua_State* L);
+
+		static int py_tuple_iterate(lua_State* L);
+
+		static int py_iterate(lua_State* L);
+
+		static int py_get_type(lua_State* L);
 
 	private:
 		

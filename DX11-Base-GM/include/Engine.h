@@ -119,7 +119,8 @@ namespace DX11Base
 
 		void AddToLogBuffer(const char* text);
 
-
+		// 添加测试函数
+		void TestEncodingOutput();
 
 	private:
 		HANDLE								pHandle{};
