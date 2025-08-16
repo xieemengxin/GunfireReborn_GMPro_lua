@@ -101,3 +101,10 @@ Tools/ssl/win32
 .vs/
 .vscode/
 gmon.out
+/DX11-Base-GM/bin/x64/Release
+/DX11-Base-GM/x64/Release
+/PCbuild/x64/Release/DllInjector.pdb
+/DllInjector/x64/Release/vc143.pdb
+/DllInjector/x64/Release/DllInjector.log
+/DllInjector/x64/Release/DllInjector.obj
+/DllInjector/x64/Release/DllInjector.iobj
